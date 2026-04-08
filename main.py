@@ -65,11 +65,16 @@ async def main() -> None:
 
     bot = commands.Bot(command_prefix="!", intents=intents)
 
-    async def _seed_guild(guild_id: int) -> None:
-        """Insert a sentinel row so the dashboard can discover this guild."""
+    async def _seed_guild(guild: discord.Guild) -> None:
+        """Persist basic guild metadata so the dashboard can discover and label this guild."""
         await db.conn.execute(
             "INSERT OR IGNORE INTO guild_config (guild_id, key, value) VALUES (?, 'registered', '1')",
-            (guild_id,),
+            (guild.id,),
+        )
+        await db.conn.execute(
+            "INSERT INTO guild_config (guild_id, key, value) VALUES (?, 'guild_name', ?) "
+            "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+            (guild.id, guild.name),
         )
         await db.conn.commit()
 
@@ -80,7 +85,7 @@ async def main() -> None:
         logger.info("Synced %d slash command(s)", len(synced))
         logger.info("Bot is ready — %d cog(s) loaded", len(bot.cogs))
         for guild in bot.guilds:
-            await _seed_guild(guild.id)
+            await _seed_guild(guild)
         logger.info("Seeded %d guild(s) into guild_config", len(bot.guilds))
         if bot.user:
             permissions = discord.Permissions(
@@ -103,7 +108,7 @@ async def main() -> None:
 
     @bot.event
     async def on_guild_join(guild: discord.Guild) -> None:
-        await _seed_guild(guild.id)
+        await _seed_guild(guild)
         logger.info("Joined guild %s (%d) — seeded guild_config", guild.name, guild.id)
 
     # --- Register cogs (order matters: mod_logging & permissions first) ---

@@ -83,11 +83,18 @@
               <td class="px-4 py-3 text-gray-400 text-xs break-all">{{ row.events }}</td>
               <td class="px-4 py-3 text-gray-500 text-xs">{{ row.created_at[:16] if row.created_at else '—' }}</td>
               <td class="px-4 py-3">
-                <form method="post" action="/integrations/github/delete" onsubmit="return confirm('Delete this GitHub subscription?')">
-                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-                  <input type="hidden" name="subscription_id" value="{{ row.id }}"/>
-                  <button class="btn-danger"><i class="fa fa-trash"></i></button>
-                </form>
+                <div class="flex items-center gap-2">
+                  <form method="post" action="/integrations/github/reset_state" onsubmit="return confirm('Reset saved GitHub poll state for this repo? The next poll will resync from the latest event without replaying backlog.')">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="repo" value="{{ row.repo }}"/>
+                    <button class="btn-secondary text-xs px-3 py-2" type="submit">Reset cursor</button>
+                  </form>
+                  <form method="post" action="/integrations/github/delete" onsubmit="return confirm('Delete this GitHub subscription?')">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="subscription_id" value="{{ row.id }}"/>
+                    <button class="btn-danger" type="submit"><i class="fa fa-trash"></i></button>
+                  </form>
+                </div>
               </td>
             </tr>
             {% else %}
@@ -114,6 +121,7 @@
               <th class="px-4 py-3 font-medium">Event Type</th>
               <th class="px-4 py-3 font-medium">Last ID</th>
               <th class="px-4 py-3 font-medium">Updated</th>
+              <th class="px-4 py-3 font-medium">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -123,9 +131,16 @@
               <td class="px-4 py-3 text-gray-400">{{ row.event_type }}</td>
               <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ row.last_id or '—' }}</td>
               <td class="px-4 py-3 text-gray-500 text-xs">{{ row.updated_at[:16] if row.updated_at else '—' }}</td>
+              <td class="px-4 py-3">
+                <form method="post" action="/integrations/github/reset_state" onsubmit="return confirm('Reset saved GitHub poll state for this repo? The next poll will resync from the latest event without replaying backlog.')">
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <input type="hidden" name="repo" value="{{ row.repo }}"/>
+                  <button class="btn-secondary text-xs px-3 py-2" type="submit">Reset cursor</button>
+                </form>
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="px-4 py-10 text-center text-gray-500">No poll state yet. Once the poller sees events, they’ll show up here.</td></tr>
+            <tr><td colspan="5" class="px-4 py-10 text-center text-gray-500">No poll state yet. Once the poller sees events, they’ll show up here.</td></tr>
             {% endfor %}
           </tbody>
         </table>

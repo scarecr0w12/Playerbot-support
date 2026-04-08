@@ -9,18 +9,34 @@
   <div class="w-full xl:w-56 flex-shrink-0">
     <div class="card p-4">
       <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
-      <div class="space-y-1">
-        {% for g in guilds %}
-        <a href="/knowledge?guild_id={{ g.guild_id }}&tab={{ active_tab }}"
-           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
-           style="text-decoration:none;">
-          <i class="fa fa-server text-xs"></i>
-          <span class="font-mono">{{ g.guild_id }}</span>
-        </a>
-        {% else %}
-        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
-        {% endfor %}
+      {% if guilds|length > 1 %}
+      <form method="get" action="/knowledge" class="space-y-2">
+        <input type="hidden" name="tab" value="{{ active_tab }}"/>
+        <label for="guild-selector" class="sr-only">Select guild</label>
+        <select id="guild-selector"
+                name="guild_id"
+                class="input w-full text-sm"
+                onchange="this.form.submit()">
+          <option value="" {% if not guild_id %}selected{% endif %} disabled>Choose a guild…</option>
+          {% for g in guilds %}
+          <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>
+            {{ g.guild_name }} — {{ g.guild_id }}
+          </option>
+          {% endfor %}
+        </select>
+      </form>
+      {% elif guilds %}
+      {% set selected_guild = guilds[0] %}
+      <div class="rounded-xl border border-[#5865F2]/30 bg-[#5865F2]/10 px-4 py-3">
+        <div class="flex items-center gap-2 text-white text-sm font-medium">
+          <i class="fa fa-server text-xs text-[#a5b4fc]"></i>
+          <span>{{ selected_guild.guild_name }}</span>
+        </div>
+        <p class="mt-1 text-xs text-gray-400 font-mono">{{ selected_guild.guild_id }}</p>
       </div>
+      {% else %}
+      <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
+      {% endif %}
     </div>
   </div>
 
@@ -34,6 +50,38 @@
     </div>
 
     {% else %}
+
+    {% if repair_summary %}
+    <div class="card p-4 mb-5 border border-emerald-500/20 bg-emerald-500/5">
+      <div class="flex items-start gap-3">
+        <i class="fa fa-wrench text-emerald-400 mt-0.5"></i>
+        <div>
+          <p class="text-sm font-medium text-emerald-300">Legacy crawl data repaired</p>
+          <p class="text-xs text-gray-300 mt-1">
+            Sources repaired: {{ repair_summary.sources_repaired }} &nbsp;·&nbsp;
+            Duplicate chunks removed: {{ repair_summary.duplicates_removed }} &nbsp;·&nbsp;
+            Missing models filled: {{ repair_summary.models_filled }}
+          </p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {% if clear_summary %}
+    <div class="card p-4 mb-5 border border-red-500/20 bg-red-500/5">
+      <div class="flex items-start gap-3">
+        <i class="fa fa-trash text-red-400 mt-0.5"></i>
+        <div>
+          <p class="text-sm font-medium text-red-300">Knowledge base cleared</p>
+          <p class="text-xs text-gray-300 mt-1">
+            Embeddings removed: {{ clear_summary.embeddings_cleared }} &nbsp;·&nbsp;
+            Crawled chunks removed: {{ clear_summary.crawled_chunks_cleared }} &nbsp;·&nbsp;
+            Sources removed: {{ clear_summary.sources_cleared }}
+          </p>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     <!-- Tab bar -->
     <div class="flex gap-1 mb-5 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
@@ -62,6 +110,16 @@
         <i class="fa fa-spider text-purple-400"></i> Crawl a Website
       </h2>
       <p class="text-sm text-gray-400 mb-5">Fetch a URL or entire site, split it into chunks, and store them in the RAG knowledge base.</p>
+
+      <div class="flex flex-wrap gap-3 items-center justify-between mb-5">
+        <p class="text-xs text-gray-500">Need to clean up older crawl data? Repairing removes exact duplicate chunks, rebuilds source metadata, and labels missing models safely.</p>
+        <form method="post" action="/knowledge/repair-crawl-metadata" onsubmit="return confirm('Repair legacy crawl metadata for this guild? Exact duplicate chunks will be removed and missing models will be backfilled.')">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <button type="submit" class="btn-secondary text-xs px-3 py-2">
+            <i class="fa fa-wrench"></i> Repair Legacy Data
+          </button>
+        </form>
+      </div>
 
       <form id="crawlForm" onsubmit="startCrawl(event)" class="space-y-4">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
@@ -120,6 +178,8 @@
                class="text-xs text-[#5865F2] hover:underline truncate block max-w-xl">{{ src.url }}</a>
             <p class="text-xs text-gray-600 mt-1">
               {{ src.chunk_count }} chunks &nbsp;·&nbsp;
+              added {{ src.added_at[:16] if src.added_at else "?" }} &nbsp;·&nbsp;
+              model {{ src.model or "—" }} &nbsp;·&nbsp;
               crawled {{ src.crawled_at[:16] if src.crawled_at else "?" }}
             </p>
           </div>
@@ -150,6 +210,14 @@
         <h2 class="font-semibold text-white">
           Embeddings <span class="text-gray-500 font-normal text-sm">({{ entries|length }})</span>
         </h2>
+        {% if entries or sources %}
+        <form method="post" action="/knowledge/reset" onsubmit="return confirm('Clear the entire knowledge base for this guild? This removes all manual and crawled embeddings plus crawl source metadata.')">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <button class="btn-danger text-xs px-3 py-2" type="submit">
+            <i class="fa fa-trash"></i> Clear Knowledge Base
+          </button>
+        </form>
+        {% endif %}
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -157,6 +225,7 @@
             <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
               <th class="px-4 py-3 font-medium">Name</th>
               <th class="px-4 py-3 font-medium">Model</th>
+              <th class="px-4 py-3 font-medium">Chunks</th>
               <th class="px-4 py-3 font-medium">Size</th>
               <th class="px-4 py-3 font-medium">Source URL</th>
               <th class="px-4 py-3 font-medium">Added</th>
@@ -168,23 +237,32 @@
             <tr class="table-row">
               <td class="px-4 py-3 text-gray-200 font-mono text-xs max-w-[180px] truncate">{{ e.name }}</td>
               <td class="px-4 py-3 text-gray-400 text-xs">{{ e.model or "—" }}</td>
+              <td class="px-4 py-3 text-gray-500 text-xs">{{ e.chunk_count }}</td>
               <td class="px-4 py-3 text-gray-500 text-xs">{{ e.text_len }} chars</td>
               <td class="px-4 py-3 text-gray-500 text-xs max-w-[160px] truncate">
                 {% if e.source_url %}
                 <a href="{{ e.source_url }}" target="_blank" class="hover:text-[#5865F2] truncate block max-w-[150px]">{{ e.source_url }}</a>
                 {% else %}—{% endif %}
               </td>
-              <td class="px-4 py-3 text-gray-500 text-xs">{{ e.created_at[:10] if e.created_at else "—" }}</td>
+              <td class="px-4 py-3 text-gray-500 text-xs">{{ e.created_at[:16] if e.created_at else "—" }}</td>
               <td class="px-4 py-3">
+                {% if e.is_crawled %}
+                <form method="post" action="/knowledge/delete-source" onsubmit="return confirm('Delete this crawled source and all of its chunks?')">
+                  <input type="hidden" name="source_url" value="{{ e.source_url }}"/>
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <button class="btn-danger"><i class="fa fa-trash"></i></button>
+                </form>
+                {% else %}
                 <form method="post" action="/knowledge/delete" onsubmit="return confirm('Delete this embedding?')">
                   <input type="hidden" name="entry_id" value="{{ e.id }}"/>
                   <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
                   <button class="btn-danger"><i class="fa fa-trash"></i></button>
                 </form>
+                {% endif %}
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="6" class="px-4 py-10 text-center text-gray-500">No embeddings stored yet.</td></tr>
+            <tr><td colspan="7" class="px-4 py-10 text-center text-gray-500">No embeddings stored yet.</td></tr>
             {% endfor %}
           </tbody>
         </table>

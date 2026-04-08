@@ -1,0 +1,390 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import dashboard.app as dashboard_app
+from bot.database import _SCHEMA as BOT_SCHEMA
+
+
+class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self._original_db_path = dashboard_app.DB_PATH
+        self._tmpdir = tempfile.TemporaryDirectory()
+        dashboard_app.DB_PATH = f"{self._tmpdir.name}/test.db"
+
+        await dashboard_app.db_execute(
+            """
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                text TEXT NOT NULL,
+                embedding BLOB,
+                model TEXT,
+                source_url TEXT,
+                qdrant_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(guild_id, name)
+            )
+            """
+        )
+        await dashboard_app.db_execute(
+            """
+            CREATE TABLE IF NOT EXISTS crawl_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                crawled_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(guild_id, url)
+            )
+            """
+        )
+
+    async def asyncTearDown(self) -> None:
+        dashboard_app.DB_PATH = self._original_db_path
+        self._tmpdir.cleanup()
+
+    async def test_get_knowledge_entries_groups_crawled_chunks_and_keeps_metadata(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO crawl_sources (guild_id, url, title, chunk_count, crawled_at) VALUES (?, ?, ?, ?, ?)",
+            (1, "https://docs.example.com/start", "Docs Start", 2, "2026-04-08 12:05:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [1]", "alpha", "embed-v1", "https://docs.example.com/start", "pt-1", "2026-04-08 12:00:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [2]", "beta beta", "embed-v1", "https://docs.example.com/start", "pt-2", "2026-04-08 12:01:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Manual Fact", "manual text", "manual-model", None, "pt-3", "2026-04-08 11:30:00"),
+        )
+
+        entries = await dashboard_app.get_knowledge_entries(1)
+
+        self.assertEqual(len(entries), 2)
+
+        crawled = next(entry for entry in entries if entry["source_url"] == "https://docs.example.com/start")
+        manual = next(entry for entry in entries if entry["source_url"] is None)
+
+        self.assertEqual(crawled["name"], "Docs Start")
+        self.assertEqual(crawled["model"], "embed-v1")
+        self.assertEqual(crawled["chunk_count"], 2)
+        self.assertEqual(crawled["text_len"], len("alpha") + len("beta beta"))
+        self.assertEqual(crawled["created_at"], "2026-04-08 12:00:00")
+        self.assertEqual(crawled["is_crawled"], 1)
+
+        self.assertEqual(manual["name"], "Manual Fact")
+        self.assertEqual(manual["model"], "manual-model")
+        self.assertEqual(manual["chunk_count"], 1)
+        self.assertEqual(manual["text_len"], len("manual text"))
+        self.assertEqual(manual["created_at"], "2026-04-08 11:30:00")
+        self.assertEqual(manual["is_crawled"], 0)
+
+    async def test_get_crawl_sources_with_metadata_exposes_added_at_and_model(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO crawl_sources (guild_id, url, title, chunk_count, crawled_at) VALUES (?, ?, ?, ?, ?)",
+            (1, "https://docs.example.com/start", "Docs Start", 2, "2026-04-08 12:05:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [1]", "alpha", "embed-v2", "https://docs.example.com/start", "pt-1", "2026-04-08 12:00:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [2]", "beta", "embed-v2", "https://docs.example.com/start", "pt-2", "2026-04-08 12:01:00"),
+        )
+
+        sources = await dashboard_app.get_crawl_sources_with_metadata(1)
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["model"], "embed-v2")
+        self.assertEqual(sources[0]["added_at"], "2026-04-08 12:00:00")
+
+    async def test_upsert_crawled_embedding_preserves_created_at_and_updates_model(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [1]", "old text", "embed-v1", "https://docs.example.com/start", "pt-old", "2026-04-01 09:00:00"),
+        )
+
+        await dashboard_app.upsert_crawled_embedding(
+            1,
+            "Docs Start [1]",
+            "new text",
+            "embed-v2",
+            "https://docs.example.com/start",
+            "pt-new",
+        )
+
+        row = await dashboard_app.db_fetchone(
+            "SELECT text, model, source_url, qdrant_id, created_at FROM embeddings WHERE guild_id = ? AND name = ?",
+            (1, "Docs Start [1]"),
+        )
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["text"], "new text")
+        self.assertEqual(row["model"], "embed-v2")
+        self.assertEqual(row["source_url"], "https://docs.example.com/start")
+        self.assertEqual(row["qdrant_id"], "pt-new")
+        self.assertEqual(row["created_at"], "2026-04-01 09:00:00")
+
+    async def test_repair_legacy_crawl_metadata_dedupes_and_backfills(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [1]", "same chunk", None, "https://docs.example.com/start", "pt-1", "2026-04-01 09:00:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Different Title [1]", "same chunk", None, "https://docs.example.com/start", "pt-2", "2026-04-01 09:05:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [2]", "second chunk", "embed-v1", "https://docs.example.com/start", "pt-3", "2026-04-01 09:06:00"),
+        )
+
+        fake_qdrant = SimpleNamespace(delete_embedding=AsyncMock())
+
+        summary = await dashboard_app.repair_legacy_crawl_metadata(1, qdrant=fake_qdrant)
+
+        self.assertEqual(
+            summary,
+            {"sources_repaired": 1, "duplicates_removed": 1, "models_filled": 1},
+        )
+        fake_qdrant.delete_embedding.assert_awaited_once_with(1, "pt-2")
+
+        rows = await dashboard_app.db_fetchall(
+            "SELECT name, text, model, created_at FROM embeddings WHERE guild_id = ? ORDER BY created_at",
+            (1,),
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["text"], "same chunk")
+        self.assertEqual(rows[0]["model"], "embed-v1")
+        self.assertEqual(rows[1]["model"], "embed-v1")
+
+        crawl_source = await dashboard_app.db_fetchone(
+            "SELECT url, title, chunk_count, crawled_at FROM crawl_sources WHERE guild_id = ? AND url = ?",
+            (1, "https://docs.example.com/start"),
+        )
+        self.assertIsNotNone(crawl_source)
+        assert crawl_source is not None
+        self.assertEqual(crawl_source["title"], "Docs Start")
+        self.assertEqual(crawl_source["chunk_count"], 2)
+        self.assertEqual(crawl_source["crawled_at"], "2026-04-01 09:06:00")
+
+    async def test_repair_route_redirects_with_summary_params(self) -> None:
+        async def fake_repair(guild_id: int, qdrant=None):
+            self.assertEqual(guild_id, 1)
+            return {"sources_repaired": 2, "duplicates_removed": 3, "models_filled": 4}
+
+        original_repair = dashboard_app.repair_legacy_crawl_metadata
+        dashboard_app.repair_legacy_crawl_metadata = fake_repair
+        try:
+            request = SimpleNamespace(session={"authenticated": True})
+            response = await dashboard_app.knowledge_repair_crawl_metadata(request, guild_id=1)
+        finally:
+            dashboard_app.repair_legacy_crawl_metadata = original_repair
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            "/knowledge?guild_id=1&tab=crawl&repair=1&sources_repaired=2&duplicates_removed=3&models_filled=4",
+        )
+
+    async def test_clear_knowledge_base_removes_embeddings_and_sources(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Manual Fact", "manual text", "manual-model", None, "pt-1", "2026-04-08 11:30:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (1, "Docs Start [1]", "alpha", "embed-v1", "https://docs.example.com/start", "pt-2", "2026-04-08 12:00:00"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO crawl_sources (guild_id, url, title, chunk_count, crawled_at) VALUES (?, ?, ?, ?, ?)",
+            (1, "https://docs.example.com/start", "Docs Start", 1, "2026-04-08 12:05:00"),
+        )
+
+        fake_qdrant = SimpleNamespace(reset_embeddings=AsyncMock())
+
+        summary = await dashboard_app.clear_knowledge_base(1, qdrant=fake_qdrant)
+
+        self.assertEqual(
+            summary,
+            {"embeddings_cleared": 2, "crawled_chunks_cleared": 1, "sources_cleared": 1},
+        )
+        fake_qdrant.reset_embeddings.assert_awaited_once_with(1)
+        self.assertEqual(
+            await dashboard_app.db_fetchone("SELECT COUNT(*) AS c FROM embeddings WHERE guild_id = ?", (1,)),
+            {"c": 0},
+        )
+        self.assertEqual(
+            await dashboard_app.db_fetchone("SELECT COUNT(*) AS c FROM crawl_sources WHERE guild_id = ?", (1,)),
+            {"c": 0},
+        )
+
+    async def test_reset_route_redirects_with_clear_summary_params(self) -> None:
+        async def fake_clear(guild_id: int, qdrant=None):
+            self.assertEqual(guild_id, 1)
+            return {"embeddings_cleared": 5, "crawled_chunks_cleared": 3, "sources_cleared": 2}
+
+        original_clear = dashboard_app.clear_knowledge_base
+        dashboard_app.clear_knowledge_base = fake_clear
+        try:
+            request = SimpleNamespace(session={"authenticated": True})
+            response = await dashboard_app.knowledge_reset(request, guild_id=1)
+        finally:
+            dashboard_app.clear_knowledge_base = original_clear
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            "/knowledge?guild_id=1&tab=embeddings&cleared=1&embeddings_cleared=5&crawled_chunks_cleared=3&sources_cleared=2",
+        )
+
+
+class DashboardKnowledgeLegacySchemaTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self._original_db_path = dashboard_app.DB_PATH
+        self._tmpdir = tempfile.TemporaryDirectory()
+        dashboard_app.DB_PATH = f"{self._tmpdir.name}/legacy.db"
+
+        await dashboard_app.db_execute(
+            """
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                text TEXT NOT NULL,
+                embedding BLOB,
+                model TEXT,
+                source_url TEXT,
+                qdrant_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        await dashboard_app.db_execute(
+            """
+            CREATE TABLE IF NOT EXISTS crawl_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                crawled_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+
+    async def asyncTearDown(self) -> None:
+        dashboard_app.DB_PATH = self._original_db_path
+        self._tmpdir.cleanup()
+
+    async def test_legacy_schema_crawl_upserts_do_not_require_unique_constraints(self) -> None:
+        await dashboard_app.upsert_crawled_embedding(
+            1,
+            "Docs Start [1]",
+            "alpha",
+            "embed-v1",
+            "https://docs.example.com/start",
+            "pt-1",
+        )
+        await dashboard_app.upsert_crawled_embedding(
+            1,
+            "Docs Start [1]",
+            "alpha updated",
+            "embed-v2",
+            "https://docs.example.com/start",
+            "pt-2",
+        )
+
+        rows = await dashboard_app.db_fetchall(
+            "SELECT id, text, model, qdrant_id FROM embeddings WHERE guild_id = ? AND name = ? ORDER BY id",
+            (1, "Docs Start [1]"),
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "alpha updated")
+        self.assertEqual(rows[0]["model"], "embed-v2")
+        self.assertEqual(rows[0]["qdrant_id"], "pt-2")
+
+        await dashboard_app.upsert_crawl_source(
+            1,
+            "https://docs.example.com/start",
+            "Docs Start",
+            1,
+            "2026-04-08 12:00:00",
+        )
+        await dashboard_app.upsert_crawl_source(
+            1,
+            "https://docs.example.com/start",
+            "Docs Start Updated",
+            2,
+            "2026-04-08 12:05:00",
+        )
+
+        source_rows = await dashboard_app.db_fetchall(
+            "SELECT id, title, chunk_count, crawled_at FROM crawl_sources WHERE guild_id = ? AND url = ? ORDER BY id",
+            (1, "https://docs.example.com/start"),
+        )
+        self.assertEqual(len(source_rows), 1)
+        self.assertEqual(source_rows[0]["title"], "Docs Start Updated")
+        self.assertEqual(source_rows[0]["chunk_count"], 2)
+        self.assertEqual(source_rows[0]["crawled_at"], "2026-04-08 12:05:00")
+
+
+class DashboardGuildListingTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self._original_db_path = dashboard_app.DB_PATH
+        self._tmpdir = tempfile.TemporaryDirectory()
+        dashboard_app.DB_PATH = f"{self._tmpdir.name}/guilds.db"
+
+        db = await dashboard_app.get_db()
+        try:
+            await db.executescript(BOT_SCHEMA)
+            await db.commit()
+        finally:
+            await db.close()
+
+    async def asyncTearDown(self) -> None:
+        dashboard_app.DB_PATH = self._original_db_path
+        self._tmpdir.cleanup()
+
+    async def test_get_all_guilds_returns_names_and_dedupes_unioned_ids(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?)",
+            (1, "registered", "1"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?)",
+            (1, "guild_name", "Alpha Squad"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "Doc A", "alpha", "embed-v1", None, "pt-1"),
+        )
+        await dashboard_app.db_execute(
+            "INSERT INTO warnings (guild_id, user_id, moderator_id, reason, active) VALUES (?, ?, ?, ?, ?)",
+            (2, 10, 11, "Heads up", 1),
+        )
+
+        guilds = await dashboard_app.get_all_guilds()
+
+        self.assertEqual(
+            guilds,
+            [
+                {"guild_id": 1, "guild_name": "Alpha Squad"},
+                {"guild_id": 2, "guild_name": "Guild 2"},
+            ],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

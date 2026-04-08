@@ -96,10 +96,24 @@ GUILD_ID_QUERIES = [
 
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$")
 VALID_GITHUB_EVENTS = {"push", "pull_request", "issues", "release"}
+LEGACY_UNKNOWN_EMBEDDING_MODEL = "legacy-unknown"
 
 
-async def get_all_guilds() -> list[dict[str, int]]:
-    query = " UNION ".join(GUILD_ID_QUERIES) + " ORDER BY guild_id"
+async def get_all_guilds() -> list[dict[str, Any]]:
+    guild_union = " UNION ".join(GUILD_ID_QUERIES)
+    query = f"""
+        WITH guilds AS (
+            {guild_union}
+        )
+        SELECT
+            guilds.guild_id,
+            COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id) AS guild_name
+        FROM guilds
+        LEFT JOIN guild_config AS meta
+            ON meta.guild_id = guilds.guild_id
+           AND meta.key = 'guild_name'
+        ORDER BY LOWER(COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id)), guilds.guild_id
+    """
     return await db_fetchall(query)
 
 
@@ -170,6 +184,266 @@ async def db_execute(query: str, params: tuple = ()) -> int:
         return cur.rowcount
     finally:
         await db.close()
+
+
+async def upsert_crawled_embedding(
+    guild_id: int,
+    name: str,
+    text: str,
+    model: str,
+    source_url: str,
+    qdrant_id: str,
+) -> int:
+    existing = await db_fetchone(
+        "SELECT id FROM embeddings WHERE guild_id = ? AND name = ? ORDER BY id LIMIT 1",
+        (guild_id, name),
+    )
+    if existing:
+        return await db_execute(
+            "UPDATE embeddings SET text = ?, model = ?, source_url = ?, qdrant_id = ? WHERE id = ?",
+            (text, model, source_url, qdrant_id, existing["id"]),
+        )
+    return await db_execute(
+        "INSERT INTO embeddings (guild_id, name, text, model, source_url, qdrant_id) VALUES (?, ?, ?, ?, ?, ?)",
+        (guild_id, name, text, model, source_url, qdrant_id),
+    )
+
+
+async def upsert_crawl_source(
+    guild_id: int,
+    url: str,
+    title: str,
+    chunk_count: int,
+    crawled_at: str | None = None,
+) -> int:
+    existing = await db_fetchone(
+        "SELECT id FROM crawl_sources WHERE guild_id = ? AND url = ? ORDER BY id LIMIT 1",
+        (guild_id, url),
+    )
+    if existing:
+        if crawled_at is None:
+            return await db_execute(
+                "UPDATE crawl_sources SET title = ?, chunk_count = ?, crawled_at = datetime('now') WHERE id = ?",
+                (title, chunk_count, existing["id"]),
+            )
+        return await db_execute(
+            "UPDATE crawl_sources SET title = ?, chunk_count = ?, crawled_at = ? WHERE id = ?",
+            (title, chunk_count, crawled_at, existing["id"]),
+        )
+    if crawled_at is None:
+        return await db_execute(
+            "INSERT INTO crawl_sources (guild_id, url, title, chunk_count) VALUES (?, ?, ?, ?)",
+            (guild_id, url, title, chunk_count),
+        )
+    return await db_execute(
+        "INSERT INTO crawl_sources (guild_id, url, title, chunk_count, crawled_at) VALUES (?, ?, ?, ?, ?)",
+        (guild_id, url, title, chunk_count, crawled_at),
+    )
+
+
+async def get_knowledge_entries(guild_id: int) -> list[dict]:
+    return await db_fetchall(
+        """
+        WITH grouped AS (
+            SELECT
+                CASE
+                    WHEN COALESCE(TRIM(source_url), '') != '' THEN 'url:' || source_url
+                    ELSE 'name:' || name
+                END AS entry_key,
+                CASE
+                    WHEN COALESCE(TRIM(source_url), '') != '' THEN 1
+                    ELSE 0
+                END AS is_crawled,
+                source_url,
+                MIN(id) AS id,
+                MAX(name) AS fallback_name,
+                MAX(NULLIF(model, '')) AS model,
+                MIN(created_at) AS created_at,
+                COUNT(*) AS chunk_count,
+                SUM(LENGTH(text)) AS text_len
+            FROM embeddings
+            WHERE guild_id = ?
+            GROUP BY entry_key, is_crawled, source_url
+        )
+        SELECT
+            g.id,
+            CASE
+                WHEN g.is_crawled = 1 THEN COALESCE(NULLIF(cs.title, ''), g.source_url)
+                ELSE g.fallback_name
+            END AS name,
+            g.model,
+            g.source_url,
+            g.created_at,
+            g.chunk_count,
+            g.text_len,
+            g.is_crawled
+        FROM grouped g
+        LEFT JOIN crawl_sources cs
+            ON cs.guild_id = ?
+           AND cs.url = g.source_url
+        ORDER BY LOWER(
+            CASE
+                WHEN g.is_crawled = 1 THEN COALESCE(NULLIF(cs.title, ''), g.source_url)
+                ELSE g.fallback_name
+            END
+        )
+        """,
+        (guild_id, guild_id),
+    )
+
+
+async def get_crawl_sources_with_metadata(guild_id: int) -> list[dict]:
+    return await db_fetchall(
+        """
+        SELECT
+            cs.*,
+            MIN(e.created_at) AS added_at,
+            MAX(NULLIF(e.model, '')) AS model
+        FROM crawl_sources cs
+        LEFT JOIN embeddings e
+            ON e.guild_id = cs.guild_id
+           AND e.source_url = cs.url
+        WHERE cs.guild_id = ?
+        GROUP BY cs.id, cs.guild_id, cs.url, cs.title, cs.chunk_count, cs.crawled_at
+        ORDER BY cs.crawled_at DESC
+        """,
+        (guild_id,),
+    )
+
+
+def _infer_crawl_title(source_url: str, rows: list[dict]) -> str:
+    for row in rows:
+        base = re.sub(r"\s*\[\d+\]$", "", (row.get("name") or "").strip())
+        if base:
+            return base
+    return source_url
+
+
+async def repair_legacy_crawl_metadata(guild_id: int, qdrant: Any | None = None) -> dict[str, int]:
+    rows = await db_fetchall(
+        "SELECT id, name, text, model, source_url, qdrant_id, created_at "
+        "FROM embeddings WHERE guild_id = ? AND COALESCE(TRIM(source_url), '') != '' "
+        "ORDER BY source_url, created_at, id",
+        (guild_id,),
+    )
+    if not rows:
+        return {"sources_repaired": 0, "duplicates_removed": 0, "models_filled": 0}
+
+    if qdrant is None:
+        from bot.qdrant_service import QdrantService
+        qdrant = QdrantService()
+
+    by_source: dict[str, list[dict]] = {}
+    for row in rows:
+        by_source.setdefault(row["source_url"], []).append(row)
+
+    sources_repaired = 0
+    duplicates_removed = 0
+    models_filled = 0
+
+    for source_url, source_rows in by_source.items():
+        kept_rows: list[dict] = []
+        duplicate_rows: list[dict] = []
+        seen_texts: set[str] = set()
+        for row in source_rows:
+            text_key = (row.get("text") or "").strip()
+            if text_key in seen_texts:
+                duplicate_rows.append(row)
+                continue
+            seen_texts.add(text_key)
+            kept_rows.append(row)
+
+        if duplicate_rows:
+            placeholders = ", ".join("?" for _ in duplicate_rows)
+            params = (guild_id, *(row["id"] for row in duplicate_rows))
+            await db_execute(
+                f"DELETE FROM embeddings WHERE guild_id = ? AND id IN ({placeholders})",
+                params,
+            )
+            for row in duplicate_rows:
+                if row.get("qdrant_id"):
+                    await qdrant.delete_embedding(guild_id, row["qdrant_id"])
+            duplicates_removed += len(duplicate_rows)
+
+        model_to_use = next(
+            ((row.get("model") or "").strip() for row in kept_rows if (row.get("model") or "").strip()),
+            LEGACY_UNKNOWN_EMBEDDING_MODEL,
+        )
+        for row in kept_rows:
+            if not (row.get("model") or "").strip():
+                await db_execute(
+                    "UPDATE embeddings SET model = ? WHERE guild_id = ? AND id = ?",
+                    (model_to_use, guild_id, row["id"]),
+                )
+                row["model"] = model_to_use
+                models_filled += 1
+
+        existing_source = await db_fetchone(
+            "SELECT title, crawled_at FROM crawl_sources WHERE guild_id = ? AND url = ?",
+            (guild_id, source_url),
+        )
+        title = (
+            (existing_source or {}).get("title")
+            or _infer_crawl_title(source_url, kept_rows)
+        )
+        crawled_at = (
+            (existing_source or {}).get("crawled_at")
+            or max((row.get("created_at") or "") for row in kept_rows)
+            or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        )
+        await upsert_crawl_source(
+            guild_id,
+            source_url,
+            title,
+            len(kept_rows),
+            crawled_at,
+        )
+        sources_repaired += 1
+
+    return {
+        "sources_repaired": sources_repaired,
+        "duplicates_removed": duplicates_removed,
+        "models_filled": models_filled,
+    }
+
+
+async def clear_knowledge_base(guild_id: int, qdrant: Any | None = None) -> dict[str, int]:
+    row = await db_fetchone(
+        "SELECT COUNT(*) AS embeddings_count, "
+        "COALESCE(SUM(CASE WHEN COALESCE(TRIM(source_url), '') != '' THEN 1 ELSE 0 END), 0) AS crawled_count "
+        "FROM embeddings WHERE guild_id = ?",
+        (guild_id,),
+    ) or {"embeddings_count": 0, "crawled_count": 0}
+    source_row = await db_fetchone(
+        "SELECT COUNT(*) AS source_count FROM crawl_sources WHERE guild_id = ?",
+        (guild_id,),
+    ) or {"source_count": 0}
+
+    await db_execute("DELETE FROM embeddings WHERE guild_id = ?", (guild_id,))
+    await db_execute("DELETE FROM crawl_sources WHERE guild_id = ?", (guild_id,))
+
+    if qdrant is None:
+        from bot.qdrant_service import QdrantService
+        qdrant = QdrantService()
+    await qdrant.reset_embeddings(guild_id)
+
+    return {
+        "embeddings_cleared": int(row["embeddings_count"]),
+        "crawled_chunks_cleared": int(row["crawled_count"]),
+        "sources_cleared": int(source_row["source_count"]),
+    }
+
+
+async def github_subscription_exists(guild_id: int, repo: str) -> bool:
+    row = await db_fetchone(
+        "SELECT 1 AS ok FROM github_subscriptions WHERE guild_id = ? AND repo = ? LIMIT 1",
+        (guild_id, repo),
+    )
+    return bool(row)
+
+
+async def reset_github_poll_state(repo: str) -> int:
+    return await db_execute("DELETE FROM github_poll_state WHERE repo = ?", (repo,))
 
 
 # ---------------------------------------------------------------------------
@@ -746,6 +1020,23 @@ async def integrations_github_delete(request: Request, guild_id: int = Form(...)
     return RedirectResponse(f"/integrations?guild_id={guild_id}", status_code=302)
 
 
+@app.post("/integrations/github/reset_state")
+async def integrations_github_reset_state(
+    request: Request,
+    guild_id: int = Form(...),
+    repo: str = Form(...),
+):
+    if r := auth_redirect(request):
+        return r
+    repo = repo.strip()
+    if not GITHUB_REPO_RE.match(repo):
+        raise HTTPException(status_code=400, detail="Invalid repo format")
+    if not await github_subscription_exists(guild_id, repo):
+        raise HTTPException(status_code=404, detail="Subscription not found for repo in this guild")
+    await reset_github_poll_state(repo)
+    return RedirectResponse(f"/integrations?guild_id={guild_id}", status_code=302)
+
+
 # ---------------------------------------------------------------------------
 # Permission overrides
 # ---------------------------------------------------------------------------
@@ -1276,7 +1567,19 @@ async def reminders_delete(request: Request, reminder_id: int = Form(...), guild
 # ---------------------------------------------------------------------------
 
 @app.get("/knowledge", response_class=HTMLResponse)
-async def knowledge_page(request: Request, guild_id: int | None = None, tab: str = "crawl"):
+async def knowledge_page(
+    request: Request,
+    guild_id: int | None = None,
+    tab: str = "crawl",
+    repair: int = 0,
+    cleared: int = 0,
+    sources_repaired: int = 0,
+    duplicates_removed: int = 0,
+    models_filled: int = 0,
+    embeddings_cleared: int = 0,
+    crawled_chunks_cleared: int = 0,
+    sources_cleared: int = 0,
+):
     if r := auth_redirect(request):
         return r
 
@@ -1286,17 +1589,12 @@ async def knowledge_page(request: Request, guild_id: int | None = None, tab: str
     learned_facts = []
     feedback_stats: dict = {"total": 0, "positive": 0, "negative": 0}
     recent_negative: list = []
+    repair_summary = None
+    clear_summary = None
 
     if guild_id:
-        entries = await db_fetchall(
-            "SELECT id, name, model, source_url, created_at, LENGTH(text) as text_len "
-            "FROM embeddings WHERE guild_id = ? ORDER BY name",
-            (guild_id,),
-        )
-        sources = await db_fetchall(
-            "SELECT * FROM crawl_sources WHERE guild_id = ? ORDER BY crawled_at DESC",
-            (guild_id,),
-        )
+        entries = await get_knowledge_entries(guild_id)
+        sources = await get_crawl_sources_with_metadata(guild_id)
         try:
             learned_facts = await db_fetchall(
                 "SELECT id, fact, source, confidence, approved, created_at "
@@ -1326,6 +1624,19 @@ async def knowledge_page(request: Request, guild_id: int | None = None, tab: str
         except Exception:
             recent_negative = []
 
+    if repair:
+        repair_summary = {
+            "sources_repaired": sources_repaired,
+            "duplicates_removed": duplicates_removed,
+            "models_filled": models_filled,
+        }
+    if cleared:
+        clear_summary = {
+            "embeddings_cleared": embeddings_cleared,
+            "crawled_chunks_cleared": crawled_chunks_cleared,
+            "sources_cleared": sources_cleared,
+        }
+
     return templates.TemplateResponse(request, "knowledge.html", ctx({
         "guilds": guilds,
         "guild_id": guild_id,
@@ -1334,6 +1645,8 @@ async def knowledge_page(request: Request, guild_id: int | None = None, tab: str
         "learned_facts": learned_facts,
         "feedback_stats": feedback_stats,
         "recent_negative": recent_negative,
+        "repair_summary": repair_summary,
+        "clear_summary": clear_summary,
         "active_tab": tab,
         "active_page": "knowledge",
     }))
@@ -1360,6 +1673,42 @@ async def knowledge_delete_source(request: Request, source_url: str = Form(...),
     from bot.qdrant_service import QdrantService
     await QdrantService().delete_embeddings_by_source(guild_id, source_url)
     return RedirectResponse(f"/knowledge?guild_id={guild_id}&tab=crawl", status_code=302)
+
+
+@app.post("/knowledge/repair-crawl-metadata")
+async def knowledge_repair_crawl_metadata(request: Request, guild_id: int = Form(...)):
+    if r := auth_redirect(request):
+        return r
+    from urllib.parse import urlencode
+
+    summary = await repair_legacy_crawl_metadata(guild_id)
+    query = urlencode({
+        "guild_id": guild_id,
+        "tab": "crawl",
+        "repair": 1,
+        "sources_repaired": summary["sources_repaired"],
+        "duplicates_removed": summary["duplicates_removed"],
+        "models_filled": summary["models_filled"],
+    })
+    return RedirectResponse(f"/knowledge?{query}", status_code=302)
+
+
+@app.post("/knowledge/reset")
+async def knowledge_reset(request: Request, guild_id: int = Form(...)):
+    if r := auth_redirect(request):
+        return r
+    from urllib.parse import urlencode
+
+    summary = await clear_knowledge_base(guild_id)
+    query = urlencode({
+        "guild_id": guild_id,
+        "tab": "embeddings",
+        "cleared": 1,
+        "embeddings_cleared": summary["embeddings_cleared"],
+        "crawled_chunks_cleared": summary["crawled_chunks_cleared"],
+        "sources_cleared": summary["sources_cleared"],
+    })
+    return RedirectResponse(f"/knowledge?{query}", status_code=302)
 
 
 @app.post("/knowledge/add-fact")
@@ -1475,9 +1824,13 @@ async def _run_crawl(job_id: str, guild_id: int, url: str, max_pages: int, chunk
                 entry_name = f"{prefix} [{i+1}]"
                 point_id = str(_uuid.uuid4())
                 try:
-                    await db_execute(
-                        "INSERT OR REPLACE INTO embeddings (guild_id, name, text, source_url, qdrant_id) VALUES (?, ?, ?, ?, ?)",
-                        (guild_id, entry_name, chunk, result.url, point_id),
+                    await upsert_crawled_embedding(
+                        guild_id,
+                        entry_name,
+                        chunk,
+                        emb_model,
+                        result.url,
+                        point_id,
                     )
                     stored += 1
                 except Exception as exc:
@@ -1488,10 +1841,11 @@ async def _run_crawl(job_id: str, guild_id: int, url: str, max_pages: int, chunk
                     await qdrant.upsert_embedding(guild_id, point_id, vec, entry_name, chunk, emb_model, source_url=result.url)
             # Upsert crawl_source record
             try:
-                await db_execute(
-                    "INSERT INTO crawl_sources (guild_id, url, title, chunk_count) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(guild_id, url) DO UPDATE SET title=excluded.title, chunk_count=excluded.chunk_count, crawled_at=datetime('now')",
-                    (guild_id, result.url, result.title or "", len(result.chunks)),
+                await upsert_crawl_source(
+                    guild_id,
+                    result.url,
+                    result.title or "",
+                    len(result.chunks),
                 )
             except Exception:
                 pass

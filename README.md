@@ -28,6 +28,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - Relevant knowledge automatically injected into conversations via cosine similarity.
 - Configurable **minimum relatedness threshold**.
 - **Adaptive learning** — key facts extracted from exchanges and stored in `facts_{guild_id}`; injected only when highly relevant (threshold 0.55).
+- **Dashboard knowledge tools** — the web dashboard groups crawled chunks by source URL, shows when content was added and which embedding model was used, and includes a **Repair Legacy Data** action to remove exact duplicate crawled chunks, rebuild source metadata, and backfill missing models for older crawl data.
 
 #### Function Calling / Custom Tools
 
@@ -286,6 +287,8 @@ python main.py
 ```
 
 Slash commands sync on startup (may take ~1 minute to appear in Discord).
+
+> **Note:** The FastAPI dashboard is started from inside `main.py` and does **not** hot-reload. If you change dashboard routes, templates, or static assets, restart `python main.py` to pick up the update.
 
 ### 6. Migrate Existing Knowledge Base (first run only)
 
