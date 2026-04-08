@@ -1,0 +1,286 @@
+# 🤖 Discord Support & Moderation Bot
+
+A full-featured, modular Discord bot with **13 cogs** for **AI-powered support**, **ticketing**, **moderation**, **economy**, **custom commands**, **reporting**, and **server management** — backed by any OpenAI-compatible LLM.
+
+Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ticket Tool, and Carl-bot.
+
+---
+
+## ✨ Features (13 Cogs)
+
+### 💬 AI Assistant (LLM-Powered) — *Inspired by [VRT-Cogs/assistant](https://github.com/vertyco/vrt-cogs)*
+
+- **/chat** `<question>` — Talk to the AI with **per-user, per-channel** conversation memory.
+- **/ask** — Alias for /chat. **Right-click context menu** → "Ask AI" on any message.
+- **/draw** `<prompt>` — **DALL-E image generation** (size, quality, style options).
+- **/tldr** — **Summarise recent channel messages** with optional focused question.
+- **/convostats** / **/convoclear** / **/convopop** — Conversation stats, clear, pop last message.
+- **/compact** — **LLM-powered conversation compaction** (summarises history to save tokens).
+- **/convoprompt** — Set a per-channel system prompt override.
+- Works with **OpenAI, Ollama, LM Studio, vLLM**, or any OpenAI-compatible API.
+
+#### RAG Knowledge Base (Embeddings)
+
+- **/embeddings add/update/remove/list/reset** — Manage knowledge entries with auto-vectorisation.
+- **/query** — Test embedding similarity search against the knowledge base.
+- Relevant knowledge is **automatically injected** into conversations via cosine similarity.
+- Configurable **minimum relatedness threshold**.
+
+#### Function Calling / Custom Tools
+
+- Built-in tools: **get_time**, **create_embed** (renders Discord embeds via AI).
+- **/customfunctions** — Define custom functions with JSON schema + Python code.
+- **/listfunctions** / **/togglefunctions** — Manage & enable/disable functions per guild.
+
+#### Auto-Response & Triggers
+
+- **Listen channels** — Bot auto-responds to every message in designated channels.
+- **@mention responses** — Bot responds when mentioned.
+- **Regex trigger phrases** — Bot responds when messages match configured patterns.
+
+#### Admin Configuration (`/assistant …`)
+
+- **toggle** · **model** · **temperature** · **maxtokens** · **maxretention**
+- **prompt** (with `{placeholders}`) · **channelprompt** · **functioncalls** · **toggledraw**
+- **relatedness** · **listen** · **mention** · **trigger** · **triggerlist**
+- **usage** · **resetusage** · **resetconversations** · **view**
+- **Token usage tracking** per guild with stats and reset.
+- **/help_support** — Full command reference.
+
+### 🎫 Ticket System
+- **Button-based ticket creation** — Admin posts a panel; users click to open.
+- **Modal popup** collects subject & description before creating the channel.
+- **Private channel per ticket** with permission-controlled access.
+- **Claim / Transcript / Close** buttons inside every ticket.
+- **/ticket_panel**, **/ticket_category**, **/ticket_close**
+
+### 🛡️ Full Moderation
+- **/warn**, **/mute**, **/unmute**, **/kick**, **/ban**, **/unban**
+- **Case tracking** — every action recorded with case ID, reason, moderator, timestamp.
+- **Warning accumulation** — configurable threshold triggers automatic mute/kick/ban.
+- **Reason modal** support for UI-driven moderation.
+- **/warnings**, **/clearwarnings**, **/modlog**
+
+### 📋 Mod Logging
+- Embed-based audit logs sent to a configurable mod-log channel.
+- Logs: mod actions, message edits/deletes, ticket events, auto-mod triggers, reports.
+- **/setmodlog**
+
+### 🤖 Auto-Moderation
+- **Spam detection** — rate-limit messages per user.
+- **Word filter** — block messages with banned words/phrases.
+- **Link filter** — block messages with banned domains.
+- Staff exempt. **/filter add_word/remove_word/add_link/remove_link/list**, **/automod_toggle**
+
+### 👋 Welcome System
+- **Configurable welcome messages** with `{user}`, `{username}`, `{server}` placeholders.
+- **Auto-role** on join.
+- **Rules acceptance panel** with persistent button → grants "Verified" role.
+- **/set_welcome_channel**, **/set_welcome_message**, **/set_autorole**, **/set_verified_role**, **/rules_panel**
+
+### � Admin
+- **Role management** — **/role add**, **/role remove**, **/role members**
+- **Self-assignable roles** — **/selfrole add/remove/list/panel** with select-menu UI
+- **Nickname management** — **/nick**
+- **Announcements** — **/announce** (rich embed to any channel)
+- **Server config viewer** — **/serverconfig**
+
+### 🗑️ Cleanup
+- **/purge** `<count>` — Delete N messages.
+- **/purge_user** `<member>` — Delete messages from a specific user.
+- **/purge_bots** — Delete bot messages.
+- **/purge_contains** `<text>` — Delete messages containing text.
+- **/purge_embeds** — Delete messages with embeds/attachments.
+
+### ✏️ Custom Commands
+- **/cc add** `<name>` `<response>` — Create text-response commands.
+- **/cc edit**, **/cc delete**, **/cc list**, **/cc info**
+- Supports **variables**: `{user}`, `{username}`, `{server}`, `{channel}`, `{members}`
+- Triggered with `!commandname` prefix.
+
+### 💰 Economy / Bank
+- **/balance** — Check your (or another user's) balance.
+- **/payday** — Collect daily credits (configurable amount & cooldown).
+- **/transfer** — Send credits to another user.
+- **/slots** `<bet>` — Slot machine gambling with jackpots.
+- **/leaderboard** — Richest members.
+- **/econset** — Admin commands for payday amount, cooldown, currency name, set balance.
+
+### 📩 Reports
+- **/report** `<user>` `<reason>` — Report a user to staff.
+- **Right-click context menu** → "Report User" with a modal popup.
+- **/reports** — Staff view of open reports.
+- **/report_resolve** — Resolve or dismiss a report.
+- **/set_reports_channel** — Configure where report notifications go.
+
+### 🧰 Utility / General
+- **/userinfo**, **/serverinfo**, **/avatar**, **/botinfo**, **/ping**
+- **/poll** `<question>` — Reaction-based yes/no/maybe poll.
+- **/8ball**, **/coinflip**, **/roll**, **/choose**
+
+### 🔐 Permissions
+- Fine-grained per-command overrides beyond Discord's built-in system.
+- **/perm allow_role/deny_role**, **/perm allow_channel/deny_channel**
+- **/perm allow_user/deny_user**, **/perm reset**, **/perm show**
+- Enforced via a global interaction check — denials are silent and ephemeral.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Prerequisites
+
+- **Python 3.10+**
+- A **Discord bot token** — [create one here](https://discord.com/developers/applications)
+- An LLM endpoint (OpenAI API key, running Ollama instance, etc.)
+
+### 2. Install
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Configure
+
+```bash
+cp .env.example .env
+# Edit .env — see table below
+```
+
+| Variable | Description | Default |
+|---|---|---|
+| `DISCORD_BOT_TOKEN` | Discord bot token | *(required)* |
+| `LLM_BASE_URL` | OpenAI-compatible API base URL | `https://api.openai.com/v1` |
+| `LLM_API_KEY` | API key (`no-key-needed` for local) | `no-key-needed` |
+| `LLM_MODEL` | Model name | `gpt-3.5-turbo` |
+| `SYSTEM_PROMPT` | System prompt for the AI | *see .env.example* |
+| `MAX_HISTORY_TURNS` | Conversation turns per user | `20` |
+| `DEFAULT_MUTE_DURATION_MINUTES` | Default mute length | `10` |
+| `MAX_WARNINGS_BEFORE_ACTION` | Warns before auto-action | `3` |
+| `WARNING_ACTION` | Auto-action: `mute` / `kick` / `ban` | `mute` |
+| `AUTOMOD_SPAM_THRESHOLD` | Messages to trigger spam | `5` |
+| `AUTOMOD_SPAM_INTERVAL` | Spam window in seconds | `5` |
+
+Economy settings (payday amount, cooldown, currency name) are configurable per-guild via `/econset` commands.
+
+#### Example: OpenAI
+```env
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=sk-your-key
+LLM_MODEL=gpt-4o
+```
+
+#### Example: Ollama (local)
+```env
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=no-key-needed
+LLM_MODEL=llama3
+```
+
+### 4. Discord Developer Portal Setup
+
+1. Create an application at [discord.com/developers](https://discord.com/developers/applications).
+2. **Bot** tab → enable **Message Content Intent** and **Server Members Intent**.
+3. Copy the bot token into `.env`.
+4. **OAuth2 → URL Generator** → scopes: `bot`, `applications.commands`.
+5. Permissions: `Administrator` (or fine-grained: Send Messages, Manage Channels, Manage Roles, Kick/Ban Members, Moderate Members, Embed Links, Attach Files, Read Message History, Use Slash Commands).
+6. Invite the bot with the generated URL.
+
+### 5. Run
+
+```bash
+python main.py
+```
+
+Slash commands sync on startup (may take ~1 minute to appear in Discord).
+
+### 6. First-Time Server Setup
+
+Once the bot is online, run these in your server:
+
+```
+/setmodlog channel:#mod-log
+/ticket_category category:Support
+/ticket_panel channel:#support
+/set_welcome_channel channel:#welcome
+/set_welcome_message message:Welcome to **{server}**, {user}! 🎉
+/set_autorole role:@Member
+/set_verified_role role:@Verified
+/rules_panel channel:#rules rules_text:Be respectful. No spam.
+/automod_toggle enabled:True
+/set_reports_channel channel:#staff-reports
+/selfrole add role:@Gamer
+/selfrole panel channel:#roles
+/econset payday_amount amount:150
+```
+
+---
+
+## 📁 Project Structure
+
+```
+├── main.py                         # Entry point — wires all services & cogs
+├── bot/
+│   ├── config.py                   # Environment-based configuration
+│   ├── database.py                 # Shared async SQLite DB (all tables)
+│   ├── llm_service.py              # LLM client (chat, embeddings, image gen, compaction)
+│   └── cogs/
+│       ├── support.py              # Full AI assistant (chat, RAG, functions, draw, tldr)
+│       ├── tickets.py              # Ticket system (modals, buttons, channels)
+│       ├── moderation.py           # warn/mute/kick/ban with case tracking
+│       ├── mod_logging.py          # Embed audit logs to mod-log channel
+│       ├── automod.py              # Spam, word filter, link filter
+│       ├── welcome.py              # Welcome messages, autorole, rules panel
+│       ├── admin.py                # Role mgmt, selfrole, nick, announce
+│       ├── cleanup.py              # Bulk message deletion / purge
+│       ├── custom_commands.py      # User-defined text commands
+│       ├── economy.py              # Bank, payday, slots, leaderboard
+│       ├── reports.py              # User → staff reporting system
+│       ├── utility.py              # userinfo, serverinfo, poll, 8ball, etc.
+│       └── permissions.py          # Per-command permission overrides
+├── data/                           # Auto-created — stores bot.db
+├── requirements.txt
+├── .env.example
+└── README.md
+```
+
+### Architecture
+
+The bot follows a **cog-based modular architecture** (inspired by Red-DiscordBot):
+
+- **13 independent cogs** — each encapsulates a complete feature.
+- All cogs share a single **async SQLite database** (`bot/database.py`) with 16 tables.
+- **ModLogging** and **Permissions** load first; other cogs reference them.
+- **Persistent views** (ticket panels, rules acceptance, self-role menus) survive bot restarts.
+- **Global interaction check** enforces custom permission overrides from the Permissions cog.
+- The LLM service is injected only into the Support cog.
+- Custom commands trigger via `!` prefix; all other commands use Discord slash commands.
+
+### Database Tables
+
+| Table | Used by |
+|---|---|
+| `guild_config` | All cogs (key-value per-guild settings) |
+| `mod_cases` | Moderation, ModLogging |
+| `warnings` | Moderation |
+| `tickets` | Tickets |
+| `ticket_messages` | Tickets (transcript) |
+| `automod_filters` | AutoMod |
+| `conversation_history` | Support (per-user, per-channel LLM conversations) |
+| `embeddings` | Support (RAG knowledge base with vectors) |
+| `custom_functions` | Support (custom function calling definitions) |
+| `token_usage` | Support (per-guild token usage tracking) |
+| `assistant_triggers` | Support (regex trigger phrases) |
+| `economy_accounts` | Economy |
+| `custom_commands` | CustomCommands |
+| `reports` | Reports |
+| `selfroles` | Admin |
+| `command_permissions` | Permissions |
+
+---
+
+## License
+
+MIT
