@@ -1,6 +1,6 @@
 # 🤖 Discord Support & Moderation Bot
 
-A full-featured, modular Discord bot with **19 cogs** for **AI-powered support**, **ticketing**, **moderation**, **economy**, **leveling**, **giveaways**, **reminders**, **starboard**, **keyword highlights**, **custom commands**, **reporting**, **GitHub integration**, and **server management** — backed by any OpenAI-compatible LLM.
+A full-featured, modular Discord bot with **19 cogs** for **AI-powered support**, **ticketing**, **moderation**, **economy**, **leveling**, **giveaways**, **reminders**, **starboard**, **keyword highlights**, **custom commands**, **reporting**, **GitHub integration**, and **server management** — backed by any OpenAI-compatible LLM and **Qdrant** vector database for scalable RAG.
 
 Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ticket Tool, Carl-bot, and MEE6.
 
@@ -19,12 +19,15 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/convoprompt** — Set a per-channel system prompt override.
 - Works with **OpenAI, Ollama, LM Studio, vLLM**, or any OpenAI-compatible API.
 
-#### RAG Knowledge Base (Embeddings)
+#### RAG Knowledge Base (Embeddings + Qdrant)
 
 - **/embeddings add/update/remove/list/reset** — Manage knowledge entries with auto-vectorisation.
+- **/embeddings crawl** `<url>` / **crawl_site** `<url>` — Crawl a page or whole site, chunk, embed, and store in the knowledge base.
 - **/query** — Test embedding similarity search against the knowledge base.
-- Relevant knowledge is **automatically injected** into conversations via cosine similarity.
+- Vectors stored in **[Qdrant](https://qdrant.tech/)** per-guild collections (`embeddings_{guild_id}`); metadata in SQLite.
+- Relevant knowledge automatically injected into conversations via cosine similarity.
 - Configurable **minimum relatedness threshold**.
+- **Adaptive learning** — key facts extracted from exchanges and stored in `facts_{guild_id}`; injected only when highly relevant (threshold 0.55).
 
 #### Function Calling / Custom Tools
 
@@ -37,6 +40,14 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **Listen channels** — Bot auto-responds to every message in designated channels.
 - **@mention responses** — Bot responds when mentioned.
 - **Regex trigger phrases** — Bot responds when messages match configured patterns.
+
+#### Feedback & Learning
+
+- Responses include **👍 / 👎 buttons** — ratings logged to the database and dashboard.
+- Works on both `/chat` slash command replies and direct message/mention responses.
+- **/assistant learningstats** — view learned facts count, total ratings, positive %, satisfaction.
+- **/assistant negativefeedback** — show recent poorly-rated Q&A pairs.
+- **/assistant togglelearning** / **resetfeedback** — control adaptive learning and clear data.
 
 #### Admin Configuration (`/assistant …`)
 
@@ -114,6 +125,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/set_reports_channel** — Configure where report notifications go.
 
 ### 🧰 Utility / General
+
 - **/userinfo**, **/serverinfo**, **/avatar**, **/botinfo**, **/ping**
 - **/poll** `<question>` — Reaction-based yes/no/maybe poll.
 - **/8ball**, **/coinflip**, **/roll**, **/choose**
@@ -125,6 +137,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - Enforced via a global interaction check — denials are silent and ephemeral.
 
 ### ⭐ XP / Leveling — *Inspired by MEE6 & Red-DiscordBot LevelUp*
+
 - Members earn **15–25 XP per message** with a configurable cooldown (default 60 s).
 - Level-up formula: `5×L² + 50×L + 100` XP needed per level.
 - **Level-up announcements** sent to a configurable channel (or the message channel).
@@ -135,6 +148,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/levels add_role / remove_role / exclude_channel / set_xp / reset** — admin tools.
 
 ### 🎉 Giveaways — *Inspired by GiveawayBot & Carl-bot*
+
 - **/giveaway start** `<prize> <duration> [winners] [channel]` — creates a live giveaway embed.
 - Entry via a **🎉 Enter button** (click again to withdraw your entry).
 - Duration format: `1d`, `2h`, `30m`, `1d12h30m`, etc.
@@ -144,6 +158,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - Giveaway views are **persistent** across bot restarts.
 
 ### ⏰ Reminders — *Inspired by Red-DiscordBot Reminder cog*
+
 - **/remindme** `<time> <message>` — set a reminder via relative (`1h30m`, `2d`) or absolute (`2026-04-10 14:30`) time.
 - Bot **DMs you** (or pings in channel) when the reminder fires.
 - **/reminders list** — view all your pending reminders with timestamps.
@@ -167,6 +182,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - Up to **25 keywords per user per guild**.
 
 ### 🐙 GitHub Integration
+
 #### Repo Monitoring (polling every 60 s)
 - Automatically posts rich embeds to subscribed channels for: **pushes**, **pull requests**, **issues**, **releases**.
 - Per-guild, per-channel subscriptions with configurable event filters.
@@ -188,6 +204,7 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/github subscriptions** — list all active subscriptions for this server.
 
 #### RAG Ingestion
+
 - **/github ingest** `<owner/repo> [branch]` — fetch the repo's README and `docs/` files and ingest them into the AI knowledge base for RAG-assisted answers.
 
 ---
@@ -199,6 +216,11 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **Python 3.10+**
 - A **Discord bot token** — [create one here](https://discord.com/developers/applications)
 - An LLM endpoint (OpenAI API key, running Ollama instance, etc.)
+- **[Qdrant](https://qdrant.tech/)** vector database (self-hosted or cloud)
+
+  ```bash
+  docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+  ```
 
 ### 2. Install
 
@@ -229,6 +251,8 @@ cp .env.example .env
 | `AUTOMOD_SPAM_THRESHOLD` | Messages to trigger spam | `5` |
 | `AUTOMOD_SPAM_INTERVAL` | Spam window in seconds | `5` |
 | `GITHUB_TOKEN` | GitHub Personal Access Token (optional) | *(empty)* |
+| `QDRANT_URL` | Qdrant server URL | `http://localhost:6333` |
+| `QDRANT_API_KEY` | Qdrant API key (cloud only) | *(empty)* |
 
 Economy settings (payday amount, cooldown, currency name) are configurable per-guild via `/econset` commands.
 
@@ -263,7 +287,17 @@ python main.py
 
 Slash commands sync on startup (may take ~1 minute to appear in Discord).
 
-### 6. First-Time Server Setup
+### 6. Migrate Existing Knowledge Base (first run only)
+
+If you have existing embedding rows in SQLite from a previous version, run once to re-embed and push them into Qdrant:
+
+```bash
+python migrate_to_qdrant.py
+```
+
+Rows that already have a `qdrant_id` are skipped automatically.
+
+### 7. First-Time Server Setup
 
 Once the bot is online, run these in your server:
 
@@ -289,13 +323,15 @@ Once the bot is online, run these in your server:
 
 ```
 ├── main.py                         # Entry point — wires all services & cogs
+├── migrate_to_qdrant.py            # One-time migration: SQLite blobs → Qdrant
 ├── bot/
 │   ├── config.py                   # Environment-based configuration
 │   ├── database.py                 # Shared async SQLite DB (all tables)
 │   ├── llm_service.py              # LLM client (chat, embeddings, image gen, compaction)
+│   ├── qdrant_service.py           # Qdrant vector DB wrapper (per-guild collections)
 │   └── cogs/
 │       ├── support.py              # Full AI assistant (chat, RAG, functions, draw, tldr)
-│       ├── highlights.py           # keyword notifications (DMs on keyword match)
+│       ├── highlights.py           # Keyword notifications (DMs on keyword match)
 │       ├── github.py               # GitHub integration (monitoring, API, RAG ingest)
 │       ├── tickets.py              # Ticket system (modals, buttons, channels)
 │       ├── moderation.py           # warn/mute/kick/ban with case tracking
@@ -309,6 +345,10 @@ Once the bot is online, run these in your server:
 │       ├── reports.py              # User → staff reporting system
 │       ├── utility.py              # userinfo, serverinfo, poll, 8ball, etc.
 │       └── permissions.py          # Per-command permission overrides
+├── dashboard/                      # FastAPI web dashboard
+│   ├── app.py                      # Routes, auth, crawl API
+│   ├── templates/                  # Jinja2 HTML templates
+│   └── static/                     # CSS / JS assets
 ├── data/                           # Auto-created — stores bot.db
 ├── requirements.txt
 ├── .env.example
@@ -319,13 +359,15 @@ Once the bot is online, run these in your server:
 
 The bot follows a **cog-based modular architecture** (inspired by Red-DiscordBot):
 
-- **13 independent cogs** — each encapsulates a complete feature.
-- All cogs share a single **async SQLite database** (`bot/database.py`) with 16 tables.
+- **19 independent cogs** — each encapsulates a complete feature.
+- All cogs share a single **async SQLite database** (`bot/database.py`) with 18+ tables.
+- **Qdrant** handles all vector storage: `embeddings_{guild_id}` (knowledge base) and `facts_{guild_id}` (learned facts). SQLite stores only metadata and `qdrant_id` references.
 - **ModLogging** and **Permissions** load first; other cogs reference them.
 - **Persistent views** (ticket panels, rules acceptance, self-role menus) survive bot restarts.
 - **Global interaction check** enforces custom permission overrides from the Permissions cog.
-- The LLM service is injected only into the Support cog.
+- The LLM service and QdrantService are injected only into the Support cog.
 - Custom commands trigger via `!` prefix; all other commands use Discord slash commands.
+- The **FastAPI dashboard** runs alongside the bot in the same process via `uvicorn`.
 
 ### Database Tables
 
@@ -338,10 +380,12 @@ The bot follows a **cog-based modular architecture** (inspired by Red-DiscordBot
 | `ticket_messages` | Tickets (transcript) |
 | `automod_filters` | AutoMod |
 | `conversation_history` | Support (per-user, per-channel LLM conversations) |
-| `embeddings` | Support (RAG knowledge base with vectors) |
+| `embeddings` | Support (RAG knowledge base metadata; vectors in Qdrant) |
 | `custom_functions` | Support (custom function calling definitions) |
 | `token_usage` | Support (per-guild token usage tracking) |
 | `assistant_triggers` | Support (regex trigger phrases) |
+| `learned_facts` | Support (adaptive learning — facts extracted from exchanges) |
+| `response_feedback` | Support (👍/👎 ratings on bot responses) |
 | `economy_accounts` | Economy |
 | `custom_commands` | CustomCommands |
 | `reports` | Reports |
