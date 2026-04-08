@@ -3,30 +3,51 @@
 {% block header %}Active Warnings{% endblock %}
 
 {% block content %}
-<div class="card p-4 mb-4">
-  <form method="get" action="/warnings" class="flex flex-wrap gap-3 items-end">
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
-      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
-        <option value="">Select guild</option>
+<div class="flex flex-col xl:flex-row gap-6">
+  <!-- Guild selector -->
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
         {% for g in guilds %}
-        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        <a href="/warnings?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
         {% endfor %}
-      </select>
+      </div>
     </div>
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">User ID (optional)</label>
-      <input type="number" name="user_id" class="input w-48" placeholder="User ID" value="{{ user_id or '' }}"/>
+    
+    <!-- Filters -->
+    {% if guild_id %}
+    <div class="card p-4 mt-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Filters</h3>
+      <form method="get" action="/warnings" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">User ID (optional)</label>
+          <input type="number" name="user_id" class="input w-full" placeholder="User ID" value="{{ user_id or '' }}"/>
+        </div>
+        <button type="submit" class="btn-primary w-full"><i class="fa fa-filter"></i> Filter</button>
+        {% if user_id %}<a href="/warnings?guild_id={{ guild_id }}" class="btn-secondary w-full text-center">Clear User</a>{% endif %}
+      </form>
     </div>
-    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
-  </form>
-</div>
-
-<div class="card overflow-hidden">
-  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-    <h2 class="font-semibold text-white">Warnings</h2>
-    <span class="text-xs text-gray-500">{{ warnings|length }} active</span>
+    {% endif %}
   </div>
+
+  <!-- Warnings table -->
+  <div class="flex-1">
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">
+          {% if guild_id %}Warnings for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Warnings{% endif %}
+        </h2>
+        <span class="text-xs text-gray-500">{{ warnings|length }} active</span>
+      </div>
   <table class="w-full text-sm">
     <thead>
       <tr class="text-left text-gray-500 text-xs border-b border-gray-800">

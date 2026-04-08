@@ -3,43 +3,54 @@
 {% block header %}Economy Accounts{% endblock %}
 
 {% block content %}
-<div class="card p-4 mb-4">
-  <form method="get" action="/economy" class="flex flex-wrap gap-3 items-end">
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
-      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
-        <option value="">Select guild</option>
+<div class="flex flex-col xl:flex-row gap-6">
+  <!-- Guild selector -->
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
         {% for g in guilds %}
-        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        <a href="/economy?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
         {% endfor %}
-      </select>
+      </div>
     </div>
-  </form>
-</div>
-
-{% if guild_id %}
-<div class="card p-5 mb-4">
-  <h3 class="text-sm font-semibold text-gray-300 mb-3">Set Balance</h3>
-  <form method="post" action="/economy/set" class="flex flex-wrap gap-3 items-end">
-    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">User ID</label>
-      <input type="number" name="user_id" class="input w-44" placeholder="User ID" required/>
+    
+    <!-- Actions -->
+    {% if guild_id %}
+    <div class="card p-4 mt-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Set Balance</h3>
+      <form method="post" action="/economy/set" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">User ID</label>
+          <input type="number" name="user_id" class="input w-full" placeholder="User ID" required/>
+        </div>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Balance</label>
+          <input type="number" name="balance" class="input w-full" placeholder="0" required/>
+        </div>
+        <button type="submit" class="btn-primary w-full"><i class="fa fa-coins"></i> Set Balance</button>
+      </form>
     </div>
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">Balance</label>
-      <input type="number" name="balance" class="input w-36" placeholder="0" required/>
-    </div>
-    <button type="submit" class="btn-primary"><i class="fa fa-coins"></i> Set Balance</button>
-  </form>
-</div>
-{% endif %}
-
-<div class="card overflow-hidden">
-  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-    <h2 class="font-semibold text-white">Leaderboard</h2>
-    <span class="text-xs text-gray-500">{{ total }} accounts</span>
+    {% endif %}
   </div>
+
+  <!-- Economy table -->
+  <div class="flex-1">
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">
+          {% if guild_id %}Leaderboard for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Accounts{% endif %}
+        </h2>
+        <span class="text-xs text-gray-500">{{ total }} accounts</span>
+      </div>
   <table class="w-full text-sm">
     <thead>
       <tr class="text-left text-gray-500 text-xs border-b border-gray-800">

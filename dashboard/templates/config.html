@@ -23,30 +23,99 @@
     </div>
   </div>
 
-  <!-- Config table -->
+  <!-- Configuration forms -->
   <div class="flex-1">
     {% if guild_id %}
-    <!-- Add key -->
-    <div class="card p-5 mb-4">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">Set / Update Config Key</h3>
-      <form method="post" action="/config/set" class="flex flex-wrap gap-3 items-end">
-        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <div class="flex-1 min-w-[160px]">
-          <label class="text-xs text-gray-500 mb-1 block">Key</label>
-          <input type="text" name="key" class="input" placeholder="e.g. mod_log_channel_id" required/>
-        </div>
-        <div class="flex-1 min-w-[160px]">
-          <label class="text-xs text-gray-500 mb-1 block">Value</label>
-          <input type="text" name="value" class="input" placeholder="Value" required/>
-        </div>
-        <button type="submit" class="btn-primary"><i class="fa fa-check"></i> Save</button>
-      </form>
-    </div>
-
     <div class="card overflow-hidden">
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
         <h2 class="font-semibold text-white">Config for Guild <span class="font-mono text-[#5865F2]">{{ guild_id }}</span></h2>
-        <span class="text-xs text-gray-500">{{ config_rows|length }} keys</span>
+        <span class="text-xs text-gray-500">{{ config_rows|length }} keys set</span>
+      </div>
+      
+      <div class="p-5">
+        <!-- Configuration form -->
+        <form method="post" action="/config/set" class="space-y-6">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          
+          {% if config_categories %}
+          {% for category, keys in config_categories.items() %}
+          <div class="border border-gray-800 rounded-lg p-4">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-lg font-semibold text-white flex items-center gap-2">
+                {% if category == "AI Assistant" %}<i class="fa fa-robot text-blue-400"></i>
+                {% elif category == "Moderation" %}<i class="fa fa-gavel text-red-400"></i>
+                {% elif category == "Auto-Moderation" %}<i class="fa fa-shield text-orange-400"></i>
+                {% elif category == "Channels" %}<i class="fa fa-hashtag text-green-400"></i>
+                {% elif category == "Economy" %}<i class="fa fa-coins text-yellow-400"></i>
+                {% elif category == "Leveling" %}<i class="fa fa-chart-line text-purple-400"></i>
+                {% elif category == "Roles" %}<i class="fa fa-user-tag text-indigo-400"></i>
+                {% endif %}
+                {{ category }} ({{ keys|length }} keys)
+              </h3>
+              {% if category == "AI Assistant" %}
+              <button type="button" onclick="refreshModels()" class="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-1" id="refresh-models-btn">
+                <i class="fa fa-refresh"></i> Refresh Models
+              </button>
+              {% endif %}
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {% for key in keys %}
+                {% set schema = config_schema[key] %}
+                {% set current_value = config_values.get(key, schema.get('default', '')) %}
+                
+                <div class="space-y-2">
+                  <label class="block text-sm font-medium text-gray-300">
+                    {{ schema.label }}
+                    {% if schema.description %}
+                    <span class="text-xs text-gray-500 block normal">{{ schema.description }}</span>
+                    {% endif %}
+                  </label>
+                  
+                  {% if schema.type == "select" %}
+                  <select name="config_{{ key }}" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none">
+                    {% for option in schema.options %}
+                    <option value="{{ option.value }}" {% if current_value == option.value %}selected{% endif %}>
+                      {{ option.label }}
+                    </option>
+                    {% endfor %}
+                  </select>
+                  
+                  {% elif schema.type == "textarea" %}
+                  <textarea name="config_{{ key }}" rows="4" 
+                            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none resize-vertical"
+                            placeholder="{{ schema.get('placeholder', '') }}">{{ current_value }}</textarea>
+                  
+                  {% elif schema.type == "text" %}
+                  <input type="text" name="config_{{ key }}" 
+                         class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none"
+                         placeholder="{{ schema.get('placeholder', '') }}"
+                         value="{{ current_value }}" />
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+          {% else %}
+          <div class="text-center text-gray-500 py-8">
+            <p>No configuration categories available.</p>
+          </div>
+          {% endif %}
+          
+          <div class="flex justify-end">
+            <button type="submit" class="btn-primary">
+              <i class="fa fa-save"></i> Save Configuration
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    
+    <!-- Current configuration table -->
+    <div class="card overflow-hidden mt-6">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h3 class="font-semibold text-white">Current Configuration</h3>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -85,4 +154,69 @@
     {% endif %}
   </div>
 </div>
+
+<script>
+async function refreshModels() {
+  const btn = document.getElementById('refresh-models-btn');
+  const originalContent = btn.innerHTML;
+  
+  // Show loading state
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Refreshing...';
+  btn.disabled = true;
+  
+  try {
+    const response = await fetch('/api/refresh-models', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      // Show success state briefly
+      btn.innerHTML = '<i class="fa fa-check"></i> Refreshed!';
+      btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+      btn.classList.add('bg-green-600', 'hover:bg-green-700');
+      
+      // Reload the page after a short delay to show updated models
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } else {
+      // Show error state
+      btn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Error';
+      btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+      btn.classList.add('bg-red-600', 'hover:bg-red-700');
+      
+      alert('Failed to refresh models: ' + result.message);
+      
+      // Reset button after delay
+      setTimeout(() => {
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+        btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+      }, 2000);
+    }
+  } catch (error) {
+    // Show error state
+    btn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Error';
+    btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+    btn.classList.add('bg-red-600', 'hover:bg-red-700');
+    
+    alert('Failed to refresh models: ' + error.message);
+    
+    // Reset button after delay
+    setTimeout(() => {
+      btn.innerHTML = originalContent;
+      btn.disabled = false;
+      btn.classList.remove('bg-red-600', 'hover:bg-red-700');
+      btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+    }, 2000);
+  }
+}
+</script>
+
 {% endblock %}

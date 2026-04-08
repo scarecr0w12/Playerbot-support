@@ -212,6 +212,7 @@ class LLMService:
 
             # Process tool calls
             messages.append(choice.message.model_dump())  # type: ignore[arg-type]
+            has_create_embed = False
             for tc in choice.message.tool_calls:
                 fn_name = tc.function.name
                 try:
@@ -223,6 +224,7 @@ class LLMService:
 
                 # Collect embeds from create_embed calls
                 if fn_name == "create_embed":
+                    has_create_embed = True
                     try:
                         embeds.append(json.loads(result))
                     except json.JSONDecodeError:
@@ -233,6 +235,15 @@ class LLMService:
                     "tool_call_id": tc.id,
                     "content": result,
                 })
+
+            # create_embed is a terminal tool — return immediately with collected embeds
+            # rather than looping back to the LLM (which causes duplicate embed spam)
+            if has_create_embed:
+                return {
+                    "content": "",
+                    "embeds": embeds,
+                    "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
+                }
 
         # Exhausted tool rounds
         return {

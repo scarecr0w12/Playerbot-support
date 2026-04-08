@@ -27,6 +27,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+# Import configuration schemas
+from dashboard.config_schema import get_config_categories
+from dashboard.dynamic_config_schema import DynamicConfigSchema
+from bot.config import Config
+from bot.model_discovery import ModelDiscoveryService
+
 logger = logging.getLogger("dashboard")
 
 # ---------------------------------------------------------------------------
@@ -44,6 +50,11 @@ app = FastAPI(title="Bot Dashboard", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=86400)
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+
+# Initialize dynamic config schema
+config = Config()
+model_discovery = ModelDiscoveryService(config)
+dynamic_schema = DynamicConfigSchema(model_discovery)
 
 
 def _now() -> str:
@@ -192,29 +203,71 @@ async def config_page(request: Request, guild_id: int | None = None):
     guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
 
     config_rows = []
+    config_values = {}
     if guild_id:
         config_rows = await db_fetchall(
             "SELECT key, value FROM guild_config WHERE guild_id = ? ORDER BY key",
             (guild_id,),
         )
+        # Convert to dict for easier lookup
+        config_values = {row["key"]: row["value"] for row in config_rows}
 
+    # Get dynamic configuration schema
+    config_schema = await dynamic_schema.get_config_schema()
+    
     return templates.TemplateResponse(request, "config.html", ctx({
         "guilds": guilds,
         "guild_id": guild_id,
         "config_rows": config_rows,
+        "config_values": config_values,
+        "config_schema": config_schema,
+        "config_categories": dynamic_schema.get_config_categories(),
         "active_page": "config",
     }))
 
 
 @app.post("/config/set")
-async def config_set(request: Request, guild_id: int = Form(...), key: str = Form(...), value: str = Form(...)):
+async def config_set(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
-    await db_execute(
-        "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?) "
-        "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
-        (guild_id, key, value),
-    )
+    
+    # Parse form data to extract config values
+    form_data = await request.form()
+    # Get current schema to validate keys
+    config_schema = await dynamic_schema.get_config_schema()
+    
+    # Process each config key that was submitted
+    for key, value in form_data.items():
+        if key.startswith("config_"):
+            config_key = key[7:]  # Remove "config_" prefix
+            
+            # Only process keys that are in our schema
+            if config_key in config_schema:
+                # Handle empty values for select fields (set to default)
+                if value.strip() == "":
+                    default_value = config_schema[config_key].get("default", "")
+                    if default_value:
+                        logger.debug(f"Setting {config_key} to default value: {default_value}")
+                        await db_execute(
+                            "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?) "
+                            "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+                            (guild_id, config_key, default_value),
+                        )
+                    else:
+                        # Remove the config if no default and empty value
+                        logger.debug(f"Removing {config_key} (empty value, no default)")
+                        await db_execute(
+                            "DELETE FROM guild_config WHERE guild_id = ? AND key = ?",
+                            (guild_id, config_key)
+                        )
+                else:
+                    logger.debug(f"Setting {config_key} to value: {value}")
+                    await db_execute(
+                        "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?) "
+                        "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+                        (guild_id, config_key, str(value)),
+                    )
+    
     return RedirectResponse(f"/config?guild_id={guild_id}", status_code=302)
 
 
@@ -226,6 +279,20 @@ async def config_delete(request: Request, guild_id: int = Form(...), key: str = 
     return RedirectResponse(f"/config?guild_id={guild_id}", status_code=302)
 
 
+@app.post("/api/refresh-models")
+async def refresh_models(request: Request):
+    """API endpoint to refresh the model list."""
+    if r := auth_redirect(request):
+        return r
+    
+    try:
+        await dynamic_schema.refresh_models()
+        return JSONResponse({"success": True, "message": "Model list refreshed successfully"})
+    except Exception as e:
+        logger.error(f"Failed to refresh models: {e}")
+        return JSONResponse({"success": False, "message": f"Failed to refresh models: {str(e)}"}, status_code=500)
+
+
 # ---------------------------------------------------------------------------
 # Moderation cases
 # ---------------------------------------------------------------------------
@@ -235,7 +302,7 @@ async def moderation_page(request: Request, guild_id: int | None = None, user_id
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM mod_cases ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     per_page = 25
     offset = (page - 1) * per_page
 
@@ -288,7 +355,7 @@ async def warnings_page(request: Request, guild_id: int | None = None, user_id: 
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM warnings ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     warnings = []
     if guild_id:
         if user_id:
@@ -328,7 +395,7 @@ async def tickets_page(request: Request, guild_id: int | None = None, status: st
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM tickets ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     tickets = []
     if guild_id:
         if status == "all":
@@ -380,7 +447,7 @@ async def automod_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM automod_filters ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     filters = []
     if guild_id:
         filters = await db_fetchall(
@@ -427,7 +494,7 @@ async def economy_page(request: Request, guild_id: int | None = None, page: int 
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM economy_accounts ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     per_page = 25
     offset = (page - 1) * per_page
     accounts = []
@@ -483,7 +550,7 @@ async def levels_page(request: Request, guild_id: int | None = None, page: int =
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM levels ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     per_page = 25
     offset = (page - 1) * per_page
     entries = []
@@ -539,7 +606,7 @@ async def giveaways_page(request: Request, guild_id: int | None = None, status: 
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM giveaways ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     giveaways = []
     if guild_id:
         if status == "all":
@@ -571,7 +638,7 @@ async def reports_page(request: Request, guild_id: int | None = None, status: st
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM reports ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     reports = []
     if guild_id:
         if status == "all":
@@ -672,7 +739,7 @@ async def reminders_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM reminders WHERE guild_id IS NOT NULL ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     reminders = []
     if guild_id:
         reminders = await db_fetchall(
@@ -705,7 +772,7 @@ async def knowledge_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM embeddings ORDER BY guild_id")
+    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
     entries = []
     sources = []
     if guild_id:

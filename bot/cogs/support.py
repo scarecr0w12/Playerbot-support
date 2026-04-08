@@ -104,6 +104,7 @@ class SupportCog(commands.Cog, name="Support"):
         self.bot = bot
         self.db = db
         self.llm = llm
+        self._processing_messages: set[int] = set()
         # Context menu: right-click message → "Ask AI about this"
         self._ask_ctx = app_commands.ContextMenu(name="Ask AI", callback=self._ask_context_menu)
         self.bot.tree.add_command(self._ask_ctx)
@@ -1115,15 +1116,23 @@ class SupportCog(commands.Cog, name="Support"):
         if not should_respond:
             return
 
-        # Strip bot mention from content
-        content = message.content
-        if self.bot.user:
-            content = content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip()
-        if not content:
+        # Deduplicate: ignore if this message is already being processed
+        if message.id in self._processing_messages:
             return
+        self._processing_messages.add(message.id)
 
-        async with message.channel.typing():
-            result = await self._do_chat(message.guild, message.channel, message.author, content)
+        try:
+            # Strip bot mention from content
+            content = message.content
+            if self.bot.user:
+                content = content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip()
+            if not content:
+                return
+
+            async with message.channel.typing():
+                result = await self._do_chat(message.guild, message.channel, message.author, content)
+        finally:
+            self._processing_messages.discard(message.id)
 
         text = result.get("content", "")
         embeds_data = result.get("embeds", [])

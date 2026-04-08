@@ -3,34 +3,57 @@
 {% block header %}Moderation Cases{% endblock %}
 
 {% block content %}
-<!-- Filters -->
-<div class="card p-4 mb-4 flex flex-wrap gap-3 items-end">
-  <form method="get" action="/moderation" class="flex flex-wrap gap-3 items-end w-full">
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
-      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
-        <option value="">All guilds</option>
+<div class="flex flex-col xl:flex-row gap-6">
+  <!-- Guild selector -->
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        <a href="/moderation"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if not guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-globe text-xs"></i>
+          <span>All Guilds</span>
+        </a>
         {% for g in guilds %}
-        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        <a href="/moderation?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
         {% endfor %}
-      </select>
+      </div>
     </div>
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">User ID (optional)</label>
-      <input type="number" name="user_id" class="input w-48" placeholder="User ID" value="{{ user_id or '' }}"/>
+    
+    <!-- Filters -->
+    {% if guild_id %}
+    <div class="card p-4 mt-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Filters</h3>
+      <form method="get" action="/moderation" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">User ID (optional)</label>
+          <input type="number" name="user_id" class="input w-full" placeholder="User ID" value="{{ user_id or '' }}"/>
+        </div>
+        <button type="submit" class="btn-primary w-full"><i class="fa fa-filter"></i> Filter</button>
+        {% if user_id %}<a href="/moderation?guild_id={{ guild_id }}" class="btn-secondary w-full text-center">Clear User</a>{% endif %}
+      </form>
     </div>
-    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
-    {% if guild_id %}<a href="/moderation?guild_id={{ guild_id }}" class="btn-secondary">Clear</a>{% endif %}
-  </form>
-</div>
-
-<div class="card overflow-hidden">
-  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-    <h2 class="font-semibold text-white">
-      {% if guild_id %}Cases for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Cases{% endif %}
-    </h2>
-    <span class="text-xs text-gray-500">{{ total }} total</span>
+    {% endif %}
   </div>
+
+  <!-- Cases table -->
+  <div class="flex-1">
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">
+          {% if guild_id %}Cases for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Cases{% endif %}
+        </h2>
+        <span class="text-xs text-gray-500">{{ total }} total</span>
+      </div>
 
   <div class="overflow-x-auto">
     <table class="w-full text-sm">

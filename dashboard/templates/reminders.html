@@ -3,23 +3,33 @@
 {% block header %}Reminders{% endblock %}
 
 {% block content %}
-<div class="card p-4 mb-4">
-  <form method="get" action="/reminders" class="flex flex-wrap gap-3 items-end">
-    <div>
-      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
-      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
-        <option value="">Select guild</option>
+<div class="flex flex-col xl:flex-row gap-6">
+  <!-- Guild selector -->
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
         {% for g in guilds %}
-        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        <a href="/reminders?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
         {% endfor %}
-      </select>
+      </div>
     </div>
-  </form>
-</div>
+  </div>
 
-<div class="card overflow-hidden">
-  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-    <h2 class="font-semibold text-white">Pending Reminders</h2>
+  <!-- Reminders table -->
+  <div class="flex-1">
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">
+          {% if guild_id %}Reminders for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Reminders{% endif %}
+        </h2>
     <span class="text-xs text-gray-500">{{ reminders|length }} shown</span>
   </div>
   <table class="w-full text-sm">
