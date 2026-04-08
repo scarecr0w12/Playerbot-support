@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Login — Bot Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+</head>
+<body class="h-full bg-gray-950 flex items-center justify-center">
+  <div class="w-full max-w-sm mx-auto px-4">
+    <div class="text-center mb-8">
+      <div class="w-16 h-16 rounded-2xl bg-[#5865F2] flex items-center justify-center mx-auto mb-4">
+        <i class="fa-brands fa-discord text-white text-3xl"></i>
+      </div>
+      <h1 class="text-2xl font-bold text-white">Bot Dashboard</h1>
+      <p class="text-gray-400 text-sm mt-1">Sign in to manage your bot</p>
+    </div>
+
+    {% if error %}
+    <div class="mb-4 flex items-center gap-2 bg-red-900/30 border border-red-700/50 text-red-400 text-sm rounded-lg px-4 py-3">
+      <i class="fa fa-circle-exclamation"></i> {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-300 mb-1">Dashboard Password</label>
+        <input
+          type="password"
+          name="password"
+          autofocus
+          placeholder="Enter your password"
+          style="display:block;width:100%;background:#1f2937;border:1px solid #374151;color:#fff;font-size:0.875rem;border-radius:0.5rem;padding:0.5rem 0.75rem;outline:none;box-sizing:border-box;"
+        />
+      </div>
+      <button type="submit" style="display:flex;width:100%;align-items:center;justify-content:center;gap:0.5rem;padding:0.625rem 1rem;background:#5865F2;color:#fff;font-size:0.875rem;font-weight:600;border-radius:0.5rem;border:none;cursor:pointer;">
+        <i class="fa fa-arrow-right-to-bracket"></i> Sign In
+      </button>
+    </form>
+
+    <p class="text-center text-xs text-gray-600 mt-4">Set <code class="text-gray-500">DASHBOARD_SECRET</code> in your <code class="text-gray-500">.env</code> file.</p>
+  </div>
+</body>
+</html>

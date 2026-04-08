@@ -7,7 +7,7 @@ Every action:
 4. Optionally DMs the target user
 
 Warnings accumulate; exceeding the threshold triggers an automatic action
-(configurable via ``Config.warning_action``).
+(configurable per-guild via ``/modset`` commands, stored in the database).
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from discord import app_commands
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from bot.config import Config
     from bot.database import Database
     from bot.cogs.mod_logging import ModLoggingCog
 
@@ -99,10 +98,9 @@ class ModLogPaginator(discord.ui.View):
 class ModerationCog(commands.Cog, name="Moderation"):
     """Slash-command moderation suite with case tracking."""
 
-    def __init__(self, bot: commands.Bot, db: Database, config: Config) -> None:
+    def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
         self.db = db
-        self.config = config
 
     @property
     def mod_log(self) -> ModLoggingCog | None:
@@ -149,7 +147,8 @@ class ModerationCog(commands.Cog, name="Moderation"):
             )
 
         # Auto-action if threshold exceeded
-        if count >= self.config.max_warnings_before_action:
+        threshold = await self.db.get_setting_int(guild.id, "mod_max_warnings_before_action")
+        if count >= threshold:
             await self._auto_action(interaction, member, count)
 
     async def _auto_action(
@@ -157,11 +156,12 @@ class ModerationCog(commands.Cog, name="Moderation"):
     ) -> None:
         guild = interaction.guild
         assert guild is not None
-        action = self.config.warning_action
+        action = await self.db.get_setting(guild.id, "mod_warning_action")
 
         auto_reason = f"Automatic {action}: reached {warn_count} warnings"
         if action == "mute":
-            duration = timedelta(minutes=self.config.default_mute_duration_minutes)
+            mute_mins = await self.db.get_setting_int(guild.id, "mod_mute_duration_minutes")
+            duration = timedelta(minutes=mute_mins)
             try:
                 await member.timeout(duration, reason=auto_reason)
             except discord.Forbidden:
@@ -217,7 +217,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
         guild = interaction.guild
         assert guild is not None
         reason = reason or "No reason provided"
-        minutes = duration_minutes or self.config.default_mute_duration_minutes
+        minutes = duration_minutes or await self.db.get_setting_int(guild.id, "mod_mute_duration_minutes")
         duration = timedelta(minutes=minutes)
 
         try:
@@ -1022,4 +1022,56 @@ class ModerationCog(commands.Cog, name="Moderation"):
             )
             embed.add_field(name=f"Recent Cases (showing {min(5, len(cases))} of {total_cases})", value=recent, inline=False)
 
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # /modset  –  admin commands to configure mod settings per-guild
+    # ------------------------------------------------------------------
+
+    modset_group = app_commands.Group(name="modset", description="Moderation settings (admin)")
+
+    @modset_group.command(name="mute_duration", description="Set default mute duration in minutes")
+    @app_commands.describe(minutes="Default mute duration in minutes")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_mute_duration(self, interaction: discord.Interaction, minutes: int) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "mod_mute_duration_minutes", str(minutes))  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Default mute duration set to **{minutes}** minute(s).", ephemeral=True
+        )
+
+    @modset_group.command(name="warn_threshold", description="Set number of warnings before auto-action")
+    @app_commands.describe(count="Number of warnings before automatic action")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_warn_threshold(self, interaction: discord.Interaction, count: int) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "mod_max_warnings_before_action", str(count))  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Auto-action threshold set to **{count}** warnings.", ephemeral=True
+        )
+
+    @modset_group.command(name="warn_action", description="Set action when warning threshold is exceeded")
+    @app_commands.describe(action="Action to take: mute, kick, or ban")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Mute", value="mute"),
+        app_commands.Choice(name="Kick", value="kick"),
+        app_commands.Choice(name="Ban", value="ban"),
+    ])
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_warn_action(self, interaction: discord.Interaction, action: app_commands.Choice[str]) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "mod_warning_action", action.value)  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Warning auto-action set to **{action.name}**.", ephemeral=True
+        )
+
+    @modset_group.command(name="show", description="Show current moderation settings")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def show_mod_settings(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        assert guild_id is not None
+        mute_dur = await self.db.get_setting(guild_id, "mod_mute_duration_minutes")
+        threshold = await self.db.get_setting(guild_id, "mod_max_warnings_before_action")
+        action = await self.db.get_setting(guild_id, "mod_warning_action")
+        embed = discord.Embed(title="⚙️ Moderation Settings", color=discord.Color.blurple())
+        embed.add_field(name="Default mute duration", value=f"{mute_dur} minute(s)", inline=True)
+        embed.add_field(name="Warning threshold", value=f"{threshold} warnings", inline=True)
+        embed.add_field(name="Auto-action", value=action, inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Warnings — Bot Dashboard{% endblock %}
+{% block header %}Active Warnings{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/warnings" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">User ID (optional)</label>
+      <input type="number" name="user_id" class="input w-48" placeholder="User ID" value="{{ user_id or '' }}"/>
+    </div>
+    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
+  </form>
+</div>
+
+<div class="card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">Warnings</h2>
+    <span class="text-xs text-gray-500">{{ warnings|length }} active</span>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+        <th class="px-4 py-3 font-medium">#</th>
+        <th class="px-4 py-3 font-medium">User ID</th>
+        <th class="px-4 py-3 font-medium">Moderator ID</th>
+        <th class="px-4 py-3 font-medium">Reason</th>
+        <th class="px-4 py-3 font-medium">Date</th>
+        <th class="px-4 py-3 font-medium">Remove</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in warnings %}
+      <tr class="table-row">
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ w.id }}</td>
+        <td class="px-4 py-3 text-gray-300 font-mono text-xs">{{ w.user_id }}</td>
+        <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ w.moderator_id }}</td>
+        <td class="px-4 py-3 text-gray-400 max-w-xs truncate text-xs">{{ w.reason or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ w.created_at[:16] if w.created_at else "—" }}</td>
+        <td class="px-4 py-3">
+          <form method="post" action="/warnings/delete" onsubmit="return confirm('Remove this warning?')">
+            <input type="hidden" name="warning_id" value="{{ w.id }}"/>
+            <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+            <button class="btn-danger"><i class="fa fa-trash"></i></button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="px-4 py-10 text-center text-gray-500">No active warnings</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

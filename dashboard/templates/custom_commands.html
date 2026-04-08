@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Custom Commands — Bot Dashboard{% endblock %}
+{% block header %}Custom Commands{% endblock %}
+
+{% block content %}
+<div class="flex flex-col xl:flex-row gap-6">
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        {% for g in guilds %}
+        <a href="/custom-commands?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-1">
+    {% if guild_id %}
+    <div class="card p-5 mb-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Add / Replace Command</h3>
+      <form method="post" action="/custom-commands/add" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div class="flex gap-3 flex-wrap">
+          <div>
+            <label class="text-xs text-gray-500 mb-1 block">Command Name</label>
+            <input type="text" name="name" class="input w-44" placeholder="e.g. rules" required/>
+          </div>
+          <div class="flex-1 min-w-[200px]">
+            <label class="text-xs text-gray-500 mb-1 block">Response</label>
+            <input type="text" name="response" class="input" placeholder="Response text..." required/>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary"><i class="fa fa-plus"></i> Add Command</button>
+      </form>
+    </div>
+
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">Commands</h2>
+        <span class="text-xs text-gray-500">{{ commands|length }} commands</span>
+      </div>
+      <div class="divide-y divide-gray-800">
+        {% for cmd in commands %}
+        <div class="flex items-start justify-between gap-4 px-5 py-3">
+          <div class="flex-1 min-w-0">
+            <p class="font-mono text-sm text-[#5865F2] font-semibold mb-0.5">!{{ cmd.name }}</p>
+            <p class="text-gray-400 text-sm break-words">{{ cmd.response }}</p>
+            <p class="text-xs text-gray-600 mt-0.5">Added {{ cmd.created_at[:10] if cmd.created_at else "—" }}</p>
+          </div>
+          <form method="post" action="/custom-commands/delete" onsubmit="return confirm('Delete !{{ cmd.name }}?')">
+            <input type="hidden" name="cmd_id" value="{{ cmd.id }}"/>
+            <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+            <button class="btn-danger"><i class="fa fa-trash"></i></button>
+          </form>
+        </div>
+        {% else %}
+        <div class="px-5 py-10 text-center text-gray-500">No custom commands yet.</div>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="card p-12 text-center">
+      <i class="fa fa-terminal text-4xl text-gray-700 mb-3"></i>
+      <p class="text-gray-400">Select a guild to manage its custom commands.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

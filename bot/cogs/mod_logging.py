@@ -332,8 +332,8 @@ class ModLoggingCog(commands.Cog, name="ModLogging"):
             )
 
         # Timeout (Discord timeout = communication_disabled_until)
-        before_to = before.communication_disabled_until
-        after_to = after.communication_disabled_until
+        before_to = getattr(before, "communication_disabled_until", None)
+        after_to = getattr(after, "communication_disabled_until", None)
         if before_to != after_to:
             if after_to and after_to > datetime.now(timezone.utc):
                 await self.log(

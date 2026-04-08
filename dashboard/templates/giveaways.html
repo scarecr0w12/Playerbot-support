@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Giveaways — Bot Dashboard{% endblock %}
+{% block header %}Giveaways{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/giveaways" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Status</label>
+      <select name="status" class="input w-32">
+        <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
+        <option value="ended"  {% if status == 'ended'  %}selected{% endif %}>Ended</option>
+        <option value="all"    {% if status == 'all'    %}selected{% endif %}>All</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
+  </form>
+</div>
+
+<div class="card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">Giveaways</h2>
+    <span class="text-xs text-gray-500">{{ giveaways|length }} shown</span>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+        <th class="px-4 py-3 font-medium">#</th>
+        <th class="px-4 py-3 font-medium">Status</th>
+        <th class="px-4 py-3 font-medium">Prize</th>
+        <th class="px-4 py-3 font-medium">Winners</th>
+        <th class="px-4 py-3 font-medium">Host ID</th>
+        <th class="px-4 py-3 font-medium">End Time</th>
+        <th class="px-4 py-3 font-medium">Channel ID</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in giveaways %}
+      <tr class="table-row">
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.id }}</td>
+        <td class="px-4 py-3">
+          {% if g.status == 'active' %}
+          <span class="badge" style="background:#10b98122;color:#4ade80;">Active</span>
+          {% else %}
+          <span class="badge" style="background:#6b728022;color:#9ca3af;">Ended</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-gray-200 font-medium">{{ g.prize }}</td>
+        <td class="px-4 py-3 text-gray-400 text-center">{{ g.winner_count }}</td>
+        <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ g.host_id }}</td>
+        <td class="px-4 py-3 text-gray-400 text-xs">{{ g.end_time[:16] if g.end_time else "—" }}</td>
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.channel_id }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="px-4 py-10 text-center text-gray-500">No giveaways found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

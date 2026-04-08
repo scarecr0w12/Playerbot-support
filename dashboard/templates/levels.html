@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Levels — Bot Dashboard{% endblock %}
+{% block header %}Levels &amp; XP{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/levels" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+
+{% if guild_id %}
+<div class="card p-5 mb-4">
+  <h3 class="text-sm font-semibold text-gray-300 mb-3">Set XP / Level</h3>
+  <form method="post" action="/levels/set" class="flex flex-wrap gap-3 items-end">
+    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">User ID</label>
+      <input type="number" name="user_id" class="input w-44" placeholder="User ID" required/>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">XP</label>
+      <input type="number" name="xp" class="input w-28" placeholder="0" required/>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Level</label>
+      <input type="number" name="level" class="input w-24" placeholder="0" required/>
+    </div>
+    <button type="submit" class="btn-primary"><i class="fa fa-chart-line"></i> Update</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">XP Leaderboard</h2>
+    <span class="text-xs text-gray-500">{{ total }} members</span>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+        <th class="px-4 py-3 font-medium">Rank</th>
+        <th class="px-4 py-3 font-medium">User ID</th>
+        <th class="px-4 py-3 font-medium">Level</th>
+        <th class="px-4 py-3 font-medium">XP</th>
+        <th class="px-4 py-3 font-medium">Last XP</th>
+        <th class="px-4 py-3 font-medium">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries %}
+      {% set rank = loop.index + (page - 1) * 25 %}
+      <tr class="table-row">
+        <td class="px-4 py-3 text-gray-500 text-xs">#{{ rank }}</td>
+        <td class="px-4 py-3 text-gray-300 font-mono text-xs">{{ entry.user_id }}</td>
+        <td class="px-4 py-3">
+          <span class="badge" style="background:#5865F222;color:#818cf8;">{{ entry.level }}</span>
+        </td>
+        <td class="px-4 py-3 font-semibold text-cyan-400">{{ entry.xp }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ entry.last_xp_at[:16] if entry.last_xp_at else "—" }}</td>
+        <td class="px-4 py-3">
+          <form method="post" action="/levels/delete" onsubmit="return confirm('Reset this user?')" style="display:inline;">
+            <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+            <input type="hidden" name="user_id" value="{{ entry.user_id }}"/>
+            <button class="btn-danger"><i class="fa fa-trash"></i></button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="px-4 py-10 text-center text-gray-500">No entries{% if not guild_id %} — select a guild{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if total_pages > 1 %}
+  <div class="flex items-center justify-between px-5 py-3 border-t border-gray-800">
+    <span class="text-xs text-gray-500">Page {{ page }} of {{ total_pages }}</span>
+    <div class="flex gap-2">
+      {% if page > 1 %}
+      <a href="/levels?guild_id={{ guild_id }}&page={{ page - 1 }}" class="btn-secondary text-xs py-1 px-3">← Prev</a>
+      {% endif %}
+      {% if page < total_pages %}
+      <a href="/levels?guild_id={{ guild_id }}&page={{ page + 1 }}" class="btn-secondary text-xs py-1 px-3">Next →</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

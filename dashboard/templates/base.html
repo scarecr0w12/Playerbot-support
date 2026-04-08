@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}Bot Dashboard{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#5865F2', dark: '#4752C4' }
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    .sidebar-link {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.5rem 0.75rem; border-radius: 0.5rem;
+      color: #9ca3af; font-size: 0.875rem; font-weight: 500;
+      transition: all 0.15s; text-decoration: none;
+    }
+    .sidebar-link:hover { color: #fff; background: rgba(255,255,255,0.07); }
+    .sidebar-link.active { color: #fff; background: rgba(88,101,242,0.15); border: 1px solid rgba(88,101,242,0.35); }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 0.75rem; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 1rem; background: #5865F2; color: #fff;
+      font-size: 0.875rem; font-weight: 500; border-radius: 0.5rem;
+      border: none; cursor: pointer; text-decoration: none; transition: background 0.15s;
+    }
+    .btn-primary:hover { background: #4752C4; }
+    .btn-danger {
+      display: inline-flex; align-items: center; gap: 0.375rem;
+      padding: 0.375rem 0.75rem; background: rgba(220,38,38,0.15); color: #f87171;
+      font-size: 0.75rem; font-weight: 500; border-radius: 0.5rem;
+      border: 1px solid rgba(220,38,38,0.3); cursor: pointer; transition: background 0.15s;
+    }
+    .btn-danger:hover { background: rgba(220,38,38,0.3); }
+    .btn-success {
+      display: inline-flex; align-items: center; gap: 0.375rem;
+      padding: 0.375rem 0.75rem; background: rgba(22,163,74,0.15); color: #4ade80;
+      font-size: 0.75rem; font-weight: 500; border-radius: 0.5rem;
+      border: 1px solid rgba(22,163,74,0.3); cursor: pointer; transition: background 0.15s;
+    }
+    .btn-success:hover { background: rgba(22,163,74,0.3); }
+    .btn-secondary {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 1rem; background: #374151; color: #fff;
+      font-size: 0.875rem; font-weight: 500; border-radius: 0.5rem;
+      border: none; cursor: pointer; transition: background 0.15s;
+    }
+    .btn-secondary:hover { background: #4b5563; }
+    .input {
+      display: block; width: 100%; background: #1f2937;
+      border: 1px solid #374151; color: #fff; font-size: 0.875rem;
+      border-radius: 0.5rem; padding: 0.5rem 0.75rem;
+      outline: none; box-sizing: border-box;
+    }
+    .input:focus { border-color: #5865F2; }
+    .input::placeholder { color: #6b7280; }
+    .badge { display: inline-flex; align-items: center; padding: 0.125rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem; font-weight: 600; }
+    .table-row { border-bottom: 1px solid #1f2937; transition: background 0.1s; }
+    .table-row:hover { background: rgba(31,41,55,0.5); }
+    select.input option { background: #1f2937; }
+  </style>
+</head>
+<body class="h-full bg-gray-950 text-white flex">
+
+<!-- Sidebar -->
+<aside class="w-64 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col h-screen sticky top-0 overflow-y-auto">
+  <div class="px-4 py-5 border-b border-gray-800 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-brand flex items-center justify-center">
+      <i class="fa-brands fa-discord text-white text-lg"></i>
+    </div>
+    <div>
+      <p class="font-bold text-white text-sm leading-tight">Bot Dashboard</p>
+      <p class="text-xs text-gray-500">Control Panel</p>
+    </div>
+  </div>
+
+  <nav class="flex-1 px-3 py-4 space-y-1">
+    <p class="px-3 text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Main</p>
+    <a href="/" class="sidebar-link {% if active_page == 'overview' %}active{% endif %}">
+      <i class="fa fa-gauge-high w-4 text-center"></i> Overview
+    </a>
+    <a href="/config" class="sidebar-link {% if active_page == 'config' %}active{% endif %}">
+      <i class="fa fa-sliders w-4 text-center"></i> Guild Config
+    </a>
+
+    <p class="px-3 text-xs font-semibold text-gray-600 uppercase tracking-wider mt-4 mb-2">Moderation</p>
+    <a href="/moderation" class="sidebar-link {% if active_page == 'moderation' %}active{% endif %}">
+      <i class="fa fa-gavel w-4 text-center"></i> Mod Cases
+    </a>
+    <a href="/warnings" class="sidebar-link {% if active_page == 'warnings' %}active{% endif %}">
+      <i class="fa fa-triangle-exclamation w-4 text-center"></i> Warnings
+    </a>
+    <a href="/reports" class="sidebar-link {% if active_page == 'reports' %}active{% endif %}">
+      <i class="fa fa-flag w-4 text-center"></i> Reports
+    </a>
+    <a href="/automod" class="sidebar-link {% if active_page == 'automod' %}active{% endif %}">
+      <i class="fa fa-shield-halved w-4 text-center"></i> Auto-Mod
+    </a>
+
+    <p class="px-3 text-xs font-semibold text-gray-600 uppercase tracking-wider mt-4 mb-2">Support</p>
+    <a href="/tickets" class="sidebar-link {% if active_page == 'tickets' %}active{% endif %}">
+      <i class="fa fa-ticket w-4 text-center"></i> Tickets
+    </a>
+
+    <p class="px-3 text-xs font-semibold text-gray-600 uppercase tracking-wider mt-4 mb-2">Features</p>
+    <a href="/economy" class="sidebar-link {% if active_page == 'economy' %}active{% endif %}">
+      <i class="fa fa-coins w-4 text-center"></i> Economy
+    </a>
+    <a href="/levels" class="sidebar-link {% if active_page == 'levels' %}active{% endif %}">
+      <i class="fa fa-chart-line w-4 text-center"></i> Levels & XP
+    </a>
+    <a href="/giveaways" class="sidebar-link {% if active_page == 'giveaways' %}active{% endif %}">
+      <i class="fa fa-gift w-4 text-center"></i> Giveaways
+    </a>
+    <a href="/reminders" class="sidebar-link {% if active_page == 'reminders' %}active{% endif %}">
+      <i class="fa fa-bell w-4 text-center"></i> Reminders
+    </a>
+    <a href="/custom-commands" class="sidebar-link {% if active_page == 'custom_commands' %}active{% endif %}">
+      <i class="fa fa-terminal w-4 text-center"></i> Custom Commands
+    </a>
+    <a href="/knowledge" class="sidebar-link {% if active_page == 'knowledge' %}active{% endif %}">
+      <i class="fa fa-brain w-4 text-center"></i> Knowledge Base
+    </a>
+  </nav>
+
+  <div class="px-3 py-4 border-t border-gray-800">
+    <a href="/logout" class="sidebar-link text-red-400 hover:text-red-300 hover:bg-red-900/20">
+      <i class="fa fa-arrow-right-from-bracket w-4 text-center"></i> Logout
+    </a>
+  </div>
+</aside>
+
+<!-- Main content -->
+<div class="flex-1 flex flex-col min-h-screen overflow-auto">
+  <!-- Top bar -->
+  <header class="bg-gray-900/80 backdrop-blur border-b border-gray-800 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="text-lg font-semibold text-white">{% block header %}Dashboard{% endblock %}</h1>
+    <div class="flex items-center gap-3">
+      <span id="live-badge" class="hidden badge bg-green-500/20 text-green-400 border border-green-500/30">
+        <span class="w-1.5 h-1.5 rounded-full bg-green-400 mr-1.5 animate-pulse"></span> Live
+      </span>
+      <span class="text-xs text-gray-500">{{ now }}</span>
+    </div>
+  </header>
+
+  <main class="flex-1 p-6">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<script src="/static/js/dashboard.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

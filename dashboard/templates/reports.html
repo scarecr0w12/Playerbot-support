@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Reports — Bot Dashboard{% endblock %}
+{% block header %}User Reports{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/reports" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Status</label>
+      <select name="status" class="input w-36">
+        <option value="open"     {% if status == 'open'     %}selected{% endif %}>Open</option>
+        <option value="resolved" {% if status == 'resolved' %}selected{% endif %}>Resolved</option>
+        <option value="dismissed"{% if status == 'dismissed'%}selected{% endif %}>Dismissed</option>
+        <option value="all"      {% if status == 'all'      %}selected{% endif %}>All</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
+  </form>
+</div>
+
+<div class="space-y-3">
+  {% for r in reports %}
+  <div class="card p-5">
+    <div class="flex items-start justify-between gap-4 flex-wrap">
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 mb-2 flex-wrap">
+          <span class="font-mono text-xs text-gray-500">#{{ r.id }}</span>
+          {% if r.status == 'open' %}
+          <span class="badge" style="background:#ef444422;color:#f87171;">Open</span>
+          {% elif r.status == 'resolved' %}
+          <span class="badge" style="background:#10b98122;color:#4ade80;">Resolved</span>
+          {% else %}
+          <span class="badge" style="background:#6b728022;color:#9ca3af;">Dismissed</span>
+          {% endif %}
+          <span class="text-xs text-gray-500">{{ r.created_at[:16] if r.created_at else "" }}</span>
+        </div>
+        <p class="text-sm text-gray-200 mb-1">
+          <span class="text-gray-500">Reporter:</span>
+          <span class="font-mono">{{ r.reporter_id }}</span>
+          <span class="text-gray-500 mx-1">→</span>
+          <span class="text-gray-500">Reported:</span>
+          <span class="font-mono">{{ r.reported_user_id }}</span>
+        </p>
+        <p class="text-sm text-gray-300">{{ r.reason }}</p>
+        {% if r.resolution_note %}
+        <p class="text-xs text-gray-500 mt-1">Note: {{ r.resolution_note }}</p>
+        {% endif %}
+      </div>
+      {% if r.status == 'open' and guild_id %}
+      <div class="flex gap-2 flex-shrink-0 flex-wrap">
+        <form method="post" action="/reports/resolve">
+          <input type="hidden" name="report_id" value="{{ r.id }}"/>
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <input type="hidden" name="note" value=""/>
+          <button class="btn-success"><i class="fa fa-check"></i> Resolve</button>
+        </form>
+        <form method="post" action="/reports/dismiss" onsubmit="return confirm('Dismiss this report?')">
+          <input type="hidden" name="report_id" value="{{ r.id }}"/>
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <button class="btn-danger"><i class="fa fa-xmark"></i> Dismiss</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="card p-12 text-center">
+    <i class="fa fa-flag text-4xl text-gray-700 mb-3"></i>
+    <p class="text-gray-400">No reports found{% if not guild_id %} — select a guild{% endif %}.</p>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

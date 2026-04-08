@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Overview — Bot Dashboard{% endblock %}
+{% block header %}Overview{% endblock %}
+
+{% block content %}
+<!-- Stat cards -->
+<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+  {% set stat_cards = [
+    ("fa-gavel",              "Mod Cases",       stats.total_cases,      "#5865F2", "/moderation"),
+    ("fa-ticket",             "Open Tickets",    stats.open_tickets,     "#0ea5e9", "/tickets"),
+    ("fa-triangle-exclamation","Active Warnings", stats.active_warnings, "#f59e0b", "/warnings"),
+    ("fa-flag",               "Open Reports",    stats.open_reports,     "#ef4444", "/reports"),
+    ("fa-gift",               "Live Giveaways",  stats.active_giveaways, "#a855f7", "/giveaways"),
+    ("fa-coins",              "Economy Accounts",stats.economy_accounts, "#10b981", "/economy"),
+    ("fa-chart-line",         "Level Entries",   stats.level_entries,    "#06b6d4", "/levels"),
+    ("fa-terminal",           "Custom Commands", stats.custom_commands,  "#f97316", "/custom-commands"),
+    ("fa-server",             "Guilds Tracked",  stats.guild_count,      "#6366f1", "/config"),
+  ] %}
+  {% for icon, label, value, color, href in stat_cards %}
+  <a href="{{ href }}" class="card p-4 flex items-center gap-3 hover:border-gray-700 transition-colors group" style="text-decoration:none;">
+    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background:{{ color }}22;">
+      <i class="fa {{ icon }}" style="color:{{ color }};font-size:1rem;"></i>
+    </div>
+    <div>
+      <p class="text-2xl font-bold text-white leading-tight">{{ value }}</p>
+      <p class="text-xs text-gray-400">{{ label }}</p>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+  <!-- Recent mod cases -->
+  <div class="card xl:col-span-2">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+      <h2 class="font-semibold text-white">Recent Mod Cases</h2>
+      <a href="/moderation" class="text-xs text-[#5865F2] hover:underline">View all →</a>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 text-xs">
+            <th class="px-5 py-3 font-medium">#</th>
+            <th class="px-5 py-3 font-medium">Action</th>
+            <th class="px-5 py-3 font-medium">User ID</th>
+            <th class="px-5 py-3 font-medium">Reason</th>
+            <th class="px-5 py-3 font-medium">When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for case in recent_cases %}
+          <tr class="table-row">
+            <td class="px-5 py-3 text-gray-400 font-mono">{{ case.id }}</td>
+            <td class="px-5 py-3">
+              {% set action_colors = {"warn": "#f59e0b", "mute": "#6366f1", "kick": "#f97316", "ban": "#ef4444", "unban": "#10b981", "unmute": "#06b6d4"} %}
+              <span class="badge" style="background:{{ action_colors.get(case.action, '#6b7280') }}22;color:{{ action_colors.get(case.action, '#9ca3af') }};">{{ case.action }}</span>
+            </td>
+            <td class="px-5 py-3 text-gray-300 font-mono text-xs">{{ case.user_id }}</td>
+            <td class="px-5 py-3 text-gray-400 max-w-[200px] truncate">{{ case.reason or "—" }}</td>
+            <td class="px-5 py-3 text-gray-500 text-xs">{{ case.created_at[:16] if case.created_at else "—" }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="px-5 py-8 text-center text-gray-500">No cases yet</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Guilds -->
+  <div class="card">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+      <h2 class="font-semibold text-white">Tracked Guilds</h2>
+      <a href="/config" class="text-xs text-[#5865F2] hover:underline">Config →</a>
+    </div>
+    <div class="px-5 py-3 space-y-2">
+      {% for g in guilds %}
+      <a href="/config?guild_id={{ g.guild_id }}"
+         class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors"
+         style="text-decoration:none;">
+        <div class="w-8 h-8 rounded-full bg-[#5865F2]/20 flex items-center justify-center flex-shrink-0">
+          <i class="fa fa-server text-[#5865F2] text-xs"></i>
+        </div>
+        <span class="text-gray-300 text-sm font-mono">{{ g.guild_id }}</span>
+      </a>
+      {% else %}
+      <p class="text-center text-gray-500 text-sm py-6">No guilds configured yet</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('live-badge').classList.remove('hidden');
+  setInterval(async () => {
+    try {
+      const data = await fetch('/api/stats').then(r => r.json());
+      document.querySelectorAll('[data-stat]').forEach(el => {
+        const key = el.dataset.stat;
+        if (data[key] !== undefined) el.textContent = data[key];
+      });
+    } catch(e) {}
+  }, 15000);
+</script>
+{% endblock %}

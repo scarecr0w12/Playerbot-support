@@ -13,6 +13,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse as _urlparse
 
 import discord
 from discord import app_commands
@@ -21,7 +22,9 @@ from discord.ext import commands
 if TYPE_CHECKING:
     from bot.database import Database
     from bot.llm_service import LLMService
-    from bot.config import Config
+
+from bot.config import DEFAULTS
+from bot.crawler import WebCrawler
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +99,11 @@ class SupportCog(commands.Cog, name="Support"):
     """AI-powered assistant with conversation memory, RAG, function calling, and more."""
 
     def __init__(
-        self, bot: commands.Bot, db: "Database", llm: "LLMService", config: "Config"
+        self, bot: commands.Bot, db: "Database", llm: "LLMService"
     ) -> None:
         self.bot = bot
         self.db = db
         self.llm = llm
-        self.config = config
         # Context menu: right-click message → "Ask AI about this"
         self._ask_ctx = app_commands.ContextMenu(name="Ask AI", callback=self._ask_context_menu)
         self.bot.tree.add_command(self._ask_ctx)
@@ -119,7 +121,7 @@ class SupportCog(commands.Cog, name="Support"):
         channel: discord.abc.Messageable | None,
         user: discord.User | discord.Member,
     ) -> str:
-        base = self.config.default_system_prompt
+        base = DEFAULTS["assistant_prompt"]
         if guild:
             custom = await self.db.get_guild_config(guild.id, "assistant_prompt")
             if custom:
@@ -145,37 +147,22 @@ class SupportCog(commands.Cog, name="Support"):
         await self.db.set_guild_config(guild_id, f"assistant_{key}", value)
 
     async def _get_model(self, guild_id: int) -> str:
-        val = await self.db.get_guild_config(guild_id, "assistant_model")
-        return val or self.config.default_model
+        return await self.db.get_setting(guild_id, "assistant_model")
 
     async def _get_temperature(self, guild_id: int) -> float:
-        val = await self.db.get_guild_config(guild_id, "assistant_temperature")
-        try:
-            return float(val) if val else self.config.default_temperature
-        except ValueError:
-            return self.config.default_temperature
+        return await self.db.get_setting_float(guild_id, "assistant_temperature")
 
     async def _get_max_tokens(self, guild_id: int) -> int:
-        val = await self.db.get_guild_config(guild_id, "assistant_max_tokens")
-        try:
-            return int(val) if val else self.config.default_max_tokens
-        except ValueError:
-            return self.config.default_max_tokens
+        return await self.db.get_setting_int(guild_id, "assistant_max_tokens")
 
     async def _get_max_retention(self, guild_id: int) -> int:
-        val = await self.db.get_guild_config(guild_id, "assistant_max_retention")
-        try:
-            return int(val) if val else self.config.default_max_history_turns * 2
-        except ValueError:
-            return self.config.default_max_history_turns * 2
+        return await self.db.get_setting_int(guild_id, "assistant_max_retention")
 
     async def _get_embedding_model(self, guild_id: int) -> str:
-        val = await self.db.get_guild_config(guild_id, "assistant_embedding_model")
-        return val or self.config.default_embedding_model
+        return await self.db.get_setting(guild_id, "assistant_embedding_model")
 
     async def _get_image_model(self, guild_id: int) -> str:
-        val = await self.db.get_guild_config(guild_id, "assistant_image_model")
-        return val or self.config.default_image_model
+        return await self.db.get_setting(guild_id, "assistant_image_model")
 
     async def _is_enabled(self, guild_id: int) -> bool:
         val = await self.db.get_guild_config(guild_id, "assistant_enabled")
@@ -237,7 +224,7 @@ class SupportCog(commands.Cog, name="Support"):
         await self.db.add_conversation_message(guild_id, channel_id, user_id, "user", question)
 
         # Fetch conversation history
-        max_ret = await self._get_max_retention(guild_id) if guild else self.config.default_max_history_turns * 2
+        max_ret = await self._get_max_retention(guild_id) if guild else int(DEFAULTS["assistant_max_retention"])
         conversation = await self.db.get_conversation_history(guild_id, channel_id, user_id, limit=max_ret)
 
         # Build system prompt
@@ -267,9 +254,9 @@ class SupportCog(commands.Cog, name="Support"):
                 tools = tools_list
 
         # Call LLM
-        model = await self._get_model(guild_id) if guild else self.config.default_model
-        temperature = await self._get_temperature(guild_id) if guild else self.config.default_temperature
-        max_tokens = await self._get_max_tokens(guild_id) if guild else self.config.default_max_tokens
+        model = await self._get_model(guild_id) if guild else DEFAULTS["assistant_model"]
+        temperature = await self._get_temperature(guild_id) if guild else float(DEFAULTS["assistant_temperature"])
+        max_tokens = await self._get_max_tokens(guild_id) if guild else int(DEFAULTS["assistant_max_tokens"])
 
         result = await self.llm.get_response(
             conversation,
@@ -619,7 +606,177 @@ class SupportCog(commands.Cog, name="Support"):
     @embed_group.command(name="reset", description="Delete ALL knowledge entries for this server")
     async def embed_reset(self, interaction: discord.Interaction) -> None:
         count = await self.db.reset_embeddings(interaction.guild.id)  # type: ignore[union-attr]
-        await interaction.response.send_message(f"🗑️ Deleted {count} embedding(s).", ephemeral=True)
+        await self.db.reset_crawl_sources(interaction.guild.id)  # type: ignore[union-attr]
+        await interaction.response.send_message(f"🗑️ Deleted {count} embedding(s) and all crawl sources.", ephemeral=True)
+
+    @embed_group.command(name="crawl", description="Fetch a URL, chunk it, and store in the RAG knowledge base")
+    @app_commands.describe(
+        url="The web page URL to crawl",
+        name_prefix="Optional prefix for entry names (default: page title)",
+        chunk_size="Characters per chunk (default 800)",
+        replace="Replace existing chunks for this URL if already crawled",
+    )
+    async def embed_crawl(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        name_prefix: str | None = None,
+        chunk_size: int = 800,
+        replace: bool = True,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+
+        crawler = WebCrawler(chunk_size=max(200, min(chunk_size, 4000)))
+        result = await crawler.crawl_one(url)
+
+        if result is None:
+            await interaction.followup.send("⚠️ Failed to fetch or parse that URL. Check it's publicly accessible HTML.")
+            return
+
+        if replace:
+            removed = await self.db.delete_embeddings_by_source(guild_id, result.url)
+            if removed:
+                await self.db.delete_crawl_source(guild_id, result.url)
+
+        _slug = re.sub(r"[^a-z0-9]+", "-", _urlparse(result.url).netloc + _urlparse(result.url).path, flags=re.IGNORECASE).strip("-")[:50]
+        prefix = name_prefix or f"{result.title[:30]}|{_slug}" or _slug or "page"
+        emb_model = await self._get_embedding_model(guild_id)
+        stored = 0
+        for i, chunk in enumerate(result.chunks):
+            entry_name = f"{prefix} [{i+1}]"
+            try:
+                _, packed = await self.llm.create_embedding(chunk, model=emb_model)
+                model_used = emb_model
+            except Exception:
+                packed, model_used = None, None
+                logger.warning("Embedding creation failed for chunk %d of %s", i, url)
+
+            ok = await self.db.add_embedding(guild_id, entry_name, chunk, packed, model_used, source_url=result.url)
+            if not ok:
+                await self.db.update_embedding(guild_id, entry_name, chunk, packed, model_used, source_url=result.url)
+            stored += 1
+
+        if stored:
+            await self.db.upsert_crawl_source(guild_id, result.url, result.title, stored)
+
+        em = discord.Embed(
+            title="🌐 URL Crawled",
+            color=discord.Color.teal(),
+        )
+        em.add_field(name="URL", value=result.url, inline=False)
+        em.add_field(name="Title", value=result.title[:200])
+        em.add_field(name="Chunks stored", value=str(stored))
+        em.add_field(name="Embedding model", value=emb_model)
+        await interaction.followup.send(embed=em)
+
+    @embed_group.command(name="crawl_site", description="Recursively crawl a site and store all pages in the RAG knowledge base")
+    @app_commands.describe(
+        url="Starting URL for the crawl",
+        max_pages="Maximum pages to crawl (1–20, default 10)",
+        chunk_size="Characters per chunk (default 800)",
+        same_origin="Only follow links within the same domain (recommended)",
+        replace="Replace existing chunks for pages already crawled",
+    )
+    async def embed_crawl_site(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        max_pages: int = 10,
+        chunk_size: int = 800,
+        same_origin: bool = True,
+        replace: bool = True,
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+
+        max_pages = max(1, min(max_pages, 20))
+        crawler = WebCrawler(
+            chunk_size=max(200, min(chunk_size, 4000)),
+            max_pages=max_pages,
+        )
+        emb_model = await self._get_embedding_model(guild_id)
+
+        pages_done = 0
+        total_chunks = 0
+        errors = 0
+        page_summaries: list[str] = []
+
+        async for result in crawler.crawl_site(url, max_pages=max_pages, same_origin_only=same_origin):
+            if replace:
+                await self.db.delete_embeddings_by_source(guild_id, result.url)
+                await self.db.delete_crawl_source(guild_id, result.url)
+
+            _slug = re.sub(r"[^a-z0-9]+", "-", _urlparse(result.url).netloc + _urlparse(result.url).path, flags=re.IGNORECASE).strip("-")[:50]
+            prefix = f"{result.title[:30]}|{_slug}" or _slug or "page"
+            stored = 0
+            for i, chunk in enumerate(result.chunks):
+                entry_name = f"{prefix} [{i+1}]"
+                try:
+                    _, packed = await self.llm.create_embedding(chunk, model=emb_model)
+                    model_used = emb_model
+                except Exception:
+                    packed, model_used = None, None
+                    errors += 1
+
+                ok = await self.db.add_embedding(guild_id, entry_name, chunk, packed, model_used, source_url=result.url)
+                if not ok:
+                    await self.db.update_embedding(guild_id, entry_name, chunk, packed, model_used, source_url=result.url)
+                stored += 1
+
+            if stored:
+                await self.db.upsert_crawl_source(guild_id, result.url, result.title, stored)
+                total_chunks += stored
+                pages_done += 1
+                page_summaries.append(f"`{result.url[:80]}` — {stored} chunks")
+
+        em = discord.Embed(
+            title="🌐 Site Crawl Complete",
+            color=discord.Color.teal(),
+        )
+        em.add_field(name="Starting URL", value=url, inline=False)
+        em.add_field(name="Pages indexed", value=str(pages_done))
+        em.add_field(name="Total chunks stored", value=str(total_chunks))
+        if errors:
+            em.add_field(name="Embedding errors", value=str(errors))
+        if page_summaries:
+            em.add_field(
+                name="Pages",
+                value="\n".join(page_summaries[:15])[:1024],
+                inline=False,
+            )
+        await interaction.followup.send(embed=em)
+
+    @embed_group.command(name="sources", description="List all crawled URL sources stored in the knowledge base")
+    async def embed_sources(self, interaction: discord.Interaction) -> None:
+        rows = await self.db.get_crawl_sources(interaction.guild.id)  # type: ignore[union-attr]
+        if not rows:
+            await interaction.response.send_message("No crawled sources found.", ephemeral=True)
+            return
+        lines = [
+            f"**{r['title'] or 'Untitled'}** — {r['chunk_count']} chunks\n{r['url']}"
+            for r in rows
+        ]
+        em = discord.Embed(
+            title=f"🌐 Crawled Sources ({len(rows)})",
+            description="\n\n".join(lines)[:4000],
+            color=discord.Color.teal(),
+        )
+        await interaction.response.send_message(embed=em, ephemeral=True)
+
+    @embed_group.command(name="forget", description="Remove all knowledge chunks from a specific crawled URL")
+    @app_commands.describe(url="The URL whose chunks should be removed")
+    async def embed_forget(
+        self, interaction: discord.Interaction, url: str
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        removed = await self.db.delete_embeddings_by_source(guild_id, url)
+        await self.db.delete_crawl_source(guild_id, url)
+        if removed:
+            await interaction.followup.send(f"🗑️ Removed {removed} chunk(s) from `{url}`.")
+        else:
+            await interaction.followup.send(f"No chunks found for `{url}`.")
 
     @app_commands.command(name="query", description="Test embedding search — find relevant knowledge")
     @app_commands.describe(query="Search query to test against the knowledge base")
@@ -1009,6 +1166,10 @@ class SupportCog(commands.Cog, name="Support"):
             name="📚 Knowledge & Functions",
             value=(
                 "**/embeddings add/update/remove/list/reset** — Manage RAG knowledge\n"
+                "**/embeddings crawl** `<url>` — Fetch a URL and store it in the RAG\n"
+                "**/embeddings crawl_site** `<url>` — Recursively crawl a site (up to 20 pages)\n"
+                "**/embeddings sources** — List all crawled URL sources\n"
+                "**/embeddings forget** `<url>` — Remove all chunks for a URL\n"
                 "**/customfunctions** / **/listfunctions** / **/togglefunctions**"
             ),
             inline=False,

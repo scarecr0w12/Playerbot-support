@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Base — Bot Dashboard{% endblock %}
+{% block header %}Knowledge Base{% endblock %}
+
+{% block content %}
+<div class="flex flex-col xl:flex-row gap-6">
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        {% for g in guilds %}
+        <a href="/knowledge?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-1 space-y-4">
+    {% if guild_id %}
+
+    <!-- Crawl sources -->
+    {% if sources %}
+    <div class="card overflow-hidden">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">Crawl Sources <span class="text-gray-500 font-normal text-sm">({{ sources|length }})</span></h2>
+      </div>
+      <div class="divide-y divide-gray-800">
+        {% for src in sources %}
+        <div class="px-5 py-3 flex items-center justify-between gap-4 flex-wrap">
+          <div class="min-w-0">
+            <p class="text-sm text-gray-200 truncate max-w-md">{{ src.title or src.url }}</p>
+            <p class="text-xs text-gray-500 truncate max-w-md">{{ src.url }}</p>
+            <p class="text-xs text-gray-600 mt-0.5">{{ src.chunk_count }} chunks · {{ src.crawled_at[:16] if src.crawled_at else "?" }}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Embeddings -->
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">Embeddings <span class="text-gray-500 font-normal text-sm">({{ entries|length }})</span></h2>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+            <th class="px-4 py-3 font-medium">Name</th>
+            <th class="px-4 py-3 font-medium">Model</th>
+            <th class="px-4 py-3 font-medium">Size</th>
+            <th class="px-4 py-3 font-medium">Source</th>
+            <th class="px-4 py-3 font-medium">Added</th>
+            <th class="px-4 py-3 font-medium">Del</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for e in entries %}
+          <tr class="table-row">
+            <td class="px-4 py-3 text-gray-200 font-mono text-xs max-w-[180px] truncate">{{ e.name }}</td>
+            <td class="px-4 py-3 text-gray-400 text-xs">{{ e.model or "—" }}</td>
+            <td class="px-4 py-3 text-gray-500 text-xs">{{ e.text_len }} chars</td>
+            <td class="px-4 py-3 text-gray-500 text-xs max-w-[160px] truncate">{{ e.source_url or "—" }}</td>
+            <td class="px-4 py-3 text-gray-500 text-xs">{{ e.created_at[:10] if e.created_at else "—" }}</td>
+            <td class="px-4 py-3">
+              <form method="post" action="/knowledge/delete" onsubmit="return confirm('Delete embedding?')">
+                <input type="hidden" name="entry_id" value="{{ e.id }}"/>
+                <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                <button class="btn-danger"><i class="fa fa-trash"></i></button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="px-4 py-10 text-center text-gray-500">No embeddings stored.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% else %}
+    <div class="card p-12 text-center">
+      <i class="fa fa-brain text-4xl text-gray-700 mb-3"></i>
+      <p class="text-gray-400">Select a guild to view its knowledge base.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -6,19 +6,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _int(key: str, default: str) -> int:
-    return int(os.getenv(key, default))
-
 
 @dataclass(frozen=True)
 class Config:
     """Application configuration loaded from environment variables.
 
-    Connection credentials (Discord token, LLM endpoint) live here.
-    LLM *behaviour* settings (model, prompt, temperature, …) are stored
-    in the database per-guild and managed via ``/assistant`` commands.
-    The ``default_*`` fields below are only used as initial fallbacks
-    when a guild has no override in the DB yet.
+    **Only connection credentials live here** — everything that can be
+    configured per-guild at runtime is stored in the database
+    (``guild_config`` table) and managed via slash commands.
+    See ``DEFAULTS`` below for the initial fallback values used when a
+    guild has no DB override yet.
     """
 
     # ── Connection credentials (env-only, never in DB) ──────────────
@@ -32,48 +29,32 @@ class Config:
         default_factory=lambda: os.getenv("LLM_API_KEY", "no-key-needed")
     )
 
-    # ── LLM behaviour defaults (seed values for guild DB) ───────────
-    default_model: str = field(
-        default_factory=lambda: os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-    )
-    default_system_prompt: str = field(
-        default_factory=lambda: os.getenv(
-            "SYSTEM_PROMPT",
-            "You are a helpful support assistant. Answer questions clearly and concisely. "
-            "If you don't know the answer, say so honestly.",
-        )
-    )
-    default_max_history_turns: int = field(
-        default_factory=lambda: _int("MAX_HISTORY_TURNS", "20")
-    )
-    default_temperature: float = field(
-        default_factory=lambda: float(os.getenv("LLM_TEMPERATURE", "0.7"))
-    )
-    default_max_tokens: int = field(
-        default_factory=lambda: _int("LLM_MAX_TOKENS", "1024")
-    )
-    default_embedding_model: str = field(
-        default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-    )
-    default_image_model: str = field(
-        default_factory=lambda: os.getenv("IMAGE_MODEL", "dall-e-3")
+    # ── GitHub integration ───────────────────────────────────────────
+    github_token: str | None = field(
+        default_factory=lambda: os.getenv("GITHUB_TOKEN")
     )
 
-    # ── Moderation defaults ─────────────────────────────────────────
-    default_mute_duration_minutes: int = field(
-        default_factory=lambda: _int("DEFAULT_MUTE_DURATION_MINUTES", "10")
-    )
-    max_warnings_before_action: int = field(
-        default_factory=lambda: _int("MAX_WARNINGS_BEFORE_ACTION", "3")
-    )
-    warning_action: str = field(
-        default_factory=lambda: os.getenv("WARNING_ACTION", "mute")
-    )
 
-    # ── Auto-mod ────────────────────────────────────────────────────
-    automod_spam_threshold: int = field(
-        default_factory=lambda: _int("AUTOMOD_SPAM_THRESHOLD", "5")
-    )
-    automod_spam_interval: int = field(
-        default_factory=lambda: _int("AUTOMOD_SPAM_INTERVAL", "5")
-    )
+# ── Hard-coded defaults for guild-level settings ────────────────────
+# Used as fallback when a guild has no DB override.  Admins can change
+# these at runtime via /assistant, /modset, /automodset, /econset, etc.
+DEFAULTS: dict[str, str] = {
+    # LLM behaviour
+    "assistant_model":           "gpt-3.5-turbo",
+    "assistant_prompt":          (
+        "You are a helpful support assistant. Answer questions clearly and concisely. "
+        "If you don't know the answer, say so honestly."
+    ),
+    "assistant_temperature":     "0.7",
+    "assistant_max_tokens":      "1024",
+    "assistant_max_retention":   "40",   # max_history_turns * 2
+    "assistant_embedding_model": "text-embedding-3-small",
+    "assistant_image_model":     "dall-e-3",
+    # Moderation
+    "mod_mute_duration_minutes":     "10",
+    "mod_max_warnings_before_action": "3",
+    "mod_warning_action":            "mute",
+    # Auto-mod
+    "automod_spam_threshold":   "5",
+    "automod_spam_interval":    "5",
+}

@@ -1,12 +1,12 @@
 # 🤖 Discord Support & Moderation Bot
 
-A full-featured, modular Discord bot with **13 cogs** for **AI-powered support**, **ticketing**, **moderation**, **economy**, **custom commands**, **reporting**, and **server management** — backed by any OpenAI-compatible LLM.
+A full-featured, modular Discord bot with **19 cogs** for **AI-powered support**, **ticketing**, **moderation**, **economy**, **leveling**, **giveaways**, **reminders**, **starboard**, **keyword highlights**, **custom commands**, **reporting**, **GitHub integration**, and **server management** — backed by any OpenAI-compatible LLM.
 
-Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ticket Tool, and Carl-bot.
+Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ticket Tool, Carl-bot, and MEE6.
 
 ---
 
-## ✨ Features (13 Cogs)
+## ✨ Features (19 Cogs)
 
 ### 💬 AI Assistant (LLM-Powered) — *Inspired by [VRT-Cogs/assistant](https://github.com/vertyco/vrt-cogs)*
 
@@ -124,6 +124,72 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/perm allow_user/deny_user**, **/perm reset**, **/perm show**
 - Enforced via a global interaction check — denials are silent and ephemeral.
 
+### ⭐ XP / Leveling — *Inspired by MEE6 & Red-DiscordBot LevelUp*
+- Members earn **15–25 XP per message** with a configurable cooldown (default 60 s).
+- Level-up formula: `5×L² + 50×L + 100` XP needed per level.
+- **Level-up announcements** sent to a configurable channel (or the message channel).
+- **Level roles** — automatically assign/remove roles when members hit thresholds.
+- **/rank** — embed showing level, XP, rank position, and progress bar.
+- **/levels leaderboard** — top XP earners.
+- **/levels toggle / set_announce / set_cooldown / set_xp_rate** — admin config.
+- **/levels add_role / remove_role / exclude_channel / set_xp / reset** — admin tools.
+
+### 🎉 Giveaways — *Inspired by GiveawayBot & Carl-bot*
+- **/giveaway start** `<prize> <duration> [winners] [channel]` — creates a live giveaway embed.
+- Entry via a **🎉 Enter button** (click again to withdraw your entry).
+- Duration format: `1d`, `2h`, `30m`, `1d12h30m`, etc.
+- **Automatic winner selection** when the timer expires (background task, every 30 s).
+- Winners are DM'd and mentioned in the giveaway channel.
+- **/giveaway end / reroll / cancel / list / info** — full management suite.
+- Giveaway views are **persistent** across bot restarts.
+
+### ⏰ Reminders — *Inspired by Red-DiscordBot Reminder cog*
+- **/remindme** `<time> <message>` — set a reminder via relative (`1h30m`, `2d`) or absolute (`2026-04-10 14:30`) time.
+- Bot **DMs you** (or pings in channel) when the reminder fires.
+- **/reminders list** — view all your pending reminders with timestamps.
+- **/reminders delete `<id>`** — cancel a specific reminder.
+- **/reminders clear** — cancel all your reminders at once.
+- Background task fires due reminders every 30 s, persists across restarts.
+
+### ⭐ Starboard — *Democratic message pinning*
+- Members react with ⭐ (configurable) to vote messages onto the starboard channel.
+- **Configurable threshold** (default 3 stars); self-reactions and bots don't count.
+- Starboard embed **auto-updates** star count; post is **removed** if stars drop below threshold.
+- Handles message deletions, image attachments, and rich embeds.
+- **/starboard set_channel / set_threshold / set_emoji / toggle / ignore_channel / info**
+
+### 🔔 Highlights / Keywords — *Inspired by Discord's built-in highlights*
+- **/highlight add `<keyword>`** — subscribe to a word/phrase; get a **DM with context** whenever it's mentioned.
+- Full-word, case-insensitive matching with a per-user, per-keyword 60 s DM cooldown.
+- Includes **3 lines of message context** in each notification.
+- Respects channel read permissions — no notifications from channels you can't see.
+- **/highlight remove / list / clear / pause** — full self-service management.
+- Up to **25 keywords per user per guild**.
+
+### 🐙 GitHub Integration
+#### Repo Monitoring (polling every 60 s)
+- Automatically posts rich embeds to subscribed channels for: **pushes**, **pull requests**, **issues**, **releases**.
+- Per-guild, per-channel subscriptions with configurable event filters.
+- Uses HTTP ETags for efficient conditional requests (avoids burning rate-limit quota).
+
+#### GitHub API Commands (`/github …`)
+- **/github repo** `<owner/repo>` — rich repo overview (stars, forks, language, topics, license).
+- **/github user** `<username>` — GitHub user profile (bio, repos, followers, location).
+- **/github issue** `<owner/repo> <number>` — look up any issue or PR by number.
+- **/github issues** `<owner/repo>` — list open issues (optional label filter).
+- **/github prs** `<owner/repo>` — list open pull requests.
+- **/github releases** `<owner/repo>` — latest releases with assets and pre-release flags.
+- **/github search** `<query>` — search GitHub repositories (sort by stars/forks/updated).
+- **/github ratelimit** — view current API rate-limit status.
+
+#### Subscription Management
+- **/github subscribe** `<repo> [channel] [events]` — subscribe a channel to a repo's events.
+- **/github unsubscribe** `<repo> [channel]` — remove a subscription.
+- **/github subscriptions** — list all active subscriptions for this server.
+
+#### RAG Ingestion
+- **/github ingest** `<owner/repo> [branch]` — fetch the repo's README and `docs/` files and ingest them into the AI knowledge base for RAG-assisted answers.
+
 ---
 
 ## 🚀 Quick Start
@@ -162,6 +228,7 @@ cp .env.example .env
 | `WARNING_ACTION` | Auto-action: `mute` / `kick` / `ban` | `mute` |
 | `AUTOMOD_SPAM_THRESHOLD` | Messages to trigger spam | `5` |
 | `AUTOMOD_SPAM_INTERVAL` | Spam window in seconds | `5` |
+| `GITHUB_TOKEN` | GitHub Personal Access Token (optional) | *(empty)* |
 
 Economy settings (payday amount, cooldown, currency name) are configurable per-guild via `/econset` commands.
 
@@ -228,6 +295,8 @@ Once the bot is online, run these in your server:
 │   ├── llm_service.py              # LLM client (chat, embeddings, image gen, compaction)
 │   └── cogs/
 │       ├── support.py              # Full AI assistant (chat, RAG, functions, draw, tldr)
+│       ├── highlights.py           # keyword notifications (DMs on keyword match)
+│       ├── github.py               # GitHub integration (monitoring, API, RAG ingest)
 │       ├── tickets.py              # Ticket system (modals, buttons, channels)
 │       ├── moderation.py           # warn/mute/kick/ban with case tracking
 │       ├── mod_logging.py          # Embed audit logs to mod-log channel

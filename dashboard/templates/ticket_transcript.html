@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Ticket #{{ ticket.id }} Transcript{% endblock %}
+{% block header %}Ticket #{{ ticket.id }} Transcript{% endblock %}
+
+{% block content %}
+<div class="mb-4 flex items-center gap-3">
+  <a href="/tickets?guild_id={{ ticket.guild_id }}" class="btn-secondary text-xs">← Back to Tickets</a>
+</div>
+
+<div class="card p-5 mb-4 flex flex-wrap gap-6">
+  <div><p class="text-xs text-gray-500 mb-1">Ticket ID</p><p class="font-mono text-white">{{ ticket.id }}</p></div>
+  <div><p class="text-xs text-gray-500 mb-1">User ID</p><p class="font-mono text-gray-300">{{ ticket.user_id }}</p></div>
+  <div><p class="text-xs text-gray-500 mb-1">Status</p><p class="text-gray-300">{{ ticket.status }}</p></div>
+  <div><p class="text-xs text-gray-500 mb-1">Subject</p><p class="text-gray-300">{{ ticket.subject or "—" }}</p></div>
+  <div><p class="text-xs text-gray-500 mb-1">Opened</p><p class="text-gray-300 text-xs">{{ ticket.created_at[:16] if ticket.created_at else "—" }}</p></div>
+  <div><p class="text-xs text-gray-500 mb-1">Closed</p><p class="text-gray-300 text-xs">{{ ticket.closed_at[:16] if ticket.closed_at else "—" }}</p></div>
+</div>
+
+<div class="card overflow-hidden">
+  <div class="px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">Messages <span class="text-gray-500 font-normal text-sm">({{ messages|length }})</span></h2>
+  </div>
+  <div class="divide-y divide-gray-800">
+    {% for msg in messages %}
+    <div class="px-5 py-4 flex gap-4">
+      <div class="w-9 h-9 rounded-full bg-gray-700 flex items-center justify-center flex-shrink-0 text-xs font-bold text-gray-300">
+        {{ (msg.user_id | string)[-2:] }}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-baseline gap-2 mb-1">
+          <span class="text-sm font-medium text-gray-200 font-mono">{{ msg.user_id }}</span>
+          <span class="text-xs text-gray-500">{{ msg.created_at[:16] if msg.created_at else "" }}</span>
+        </div>
+        <p class="text-sm text-gray-300 whitespace-pre-wrap break-words">{{ msg.content }}</p>
+      </div>
+    </div>
+    {% else %}
+    <div class="px-5 py-10 text-center text-gray-500">No messages recorded for this ticket.</div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

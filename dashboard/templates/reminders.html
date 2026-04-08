@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Reminders — Bot Dashboard{% endblock %}
+{% block header %}Reminders{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/reminders" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+</div>
+
+<div class="card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">Pending Reminders</h2>
+    <span class="text-xs text-gray-500">{{ reminders|length }} shown</span>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+        <th class="px-4 py-3 font-medium">#</th>
+        <th class="px-4 py-3 font-medium">User ID</th>
+        <th class="px-4 py-3 font-medium">Message</th>
+        <th class="px-4 py-3 font-medium">Due</th>
+        <th class="px-4 py-3 font-medium">Channel ID</th>
+        <th class="px-4 py-3 font-medium">Del</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in reminders %}
+      <tr class="table-row">
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ r.id }}</td>
+        <td class="px-4 py-3 text-gray-300 font-mono text-xs">{{ r.user_id }}</td>
+        <td class="px-4 py-3 text-gray-400 max-w-xs truncate text-xs">{{ r.message }}</td>
+        <td class="px-4 py-3 text-gray-400 text-xs">{{ r.end_time[:16] if r.end_time else "—" }}</td>
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ r.channel_id or "—" }}</td>
+        <td class="px-4 py-3">
+          <form method="post" action="/reminders/delete" onsubmit="return confirm('Delete reminder?')">
+            <input type="hidden" name="reminder_id" value="{{ r.id }}"/>
+            <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+            <button class="btn-danger"><i class="fa fa-trash"></i></button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="px-4 py-10 text-center text-gray-500">No reminders{% if not guild_id %} — select a guild{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

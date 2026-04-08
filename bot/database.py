@@ -112,10 +112,24 @@ CREATE TABLE IF NOT EXISTS embeddings (
     text        TEXT    NOT NULL,
     embedding   BLOB,                   -- serialised float list
     model       TEXT,
+    source_url  TEXT,                   -- origin URL if ingested via crawler
     created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(guild_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_embed_guild ON embeddings (guild_id);
+CREATE INDEX IF NOT EXISTS idx_embed_source ON embeddings (guild_id, source_url);
+
+-- Crawl sources — tracks which URLs have been ingested per guild
+CREATE TABLE IF NOT EXISTS crawl_sources (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    INTEGER NOT NULL,
+    url         TEXT    NOT NULL,
+    title       TEXT,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    crawled_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(guild_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_guild ON crawl_sources (guild_id);
 
 -- Custom function definitions for function calling
 CREATE TABLE IF NOT EXISTS custom_functions (
@@ -215,6 +229,95 @@ CREATE TABLE IF NOT EXISTS case_notes (
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_notes_user ON case_notes (guild_id, user_id);
+
+-- Leveling / XP system
+CREATE TABLE IF NOT EXISTS levels (
+    guild_id        INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL,
+    xp              INTEGER NOT NULL DEFAULT 0,
+    level           INTEGER NOT NULL DEFAULT 0,
+    last_xp_at      TEXT,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_levels_guild ON levels (guild_id, xp DESC);
+
+-- Giveaways
+CREATE TABLE IF NOT EXISTS giveaways (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    INTEGER NOT NULL,
+    channel_id  INTEGER NOT NULL,
+    message_id  INTEGER,
+    prize       TEXT    NOT NULL,
+    end_time    TEXT    NOT NULL,
+    winner_count INTEGER NOT NULL DEFAULT 1,
+    host_id     INTEGER NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'active',  -- active, ended
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_giveaways_guild ON giveaways (guild_id, status);
+
+CREATE TABLE IF NOT EXISTS giveaway_entries (
+    giveaway_id INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    entered_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (giveaway_id, user_id)
+);
+
+-- Reminders
+CREATE TABLE IF NOT EXISTS reminders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL,
+    guild_id    INTEGER,
+    channel_id  INTEGER,
+    message     TEXT    NOT NULL,
+    end_time    TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders (end_time);
+
+-- Starboard
+CREATE TABLE IF NOT EXISTS starboard_messages (
+    message_id      INTEGER PRIMARY KEY,
+    guild_id        INTEGER NOT NULL,
+    channel_id      INTEGER NOT NULL,
+    author_id       INTEGER NOT NULL,
+    star_count      INTEGER NOT NULL DEFAULT 0,
+    starboard_msg_id INTEGER,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_starboard_guild ON starboard_messages (guild_id);
+
+-- Highlights / keyword notifications
+CREATE TABLE IF NOT EXISTS highlights (
+    user_id     INTEGER NOT NULL,
+    guild_id    INTEGER NOT NULL,
+    keyword     TEXT    NOT NULL,
+    PRIMARY KEY (user_id, guild_id, keyword)
+);
+CREATE INDEX IF NOT EXISTS idx_highlights_guild ON highlights (guild_id);
+
+-- GitHub repo subscriptions (per guild)
+CREATE TABLE IF NOT EXISTS github_subscriptions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        INTEGER NOT NULL,
+    channel_id      INTEGER NOT NULL,
+    repo            TEXT    NOT NULL,       -- "owner/repo"
+    events          TEXT    NOT NULL DEFAULT 'push,pull_request,issues,release',
+    added_by        INTEGER NOT NULL,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(guild_id, channel_id, repo)
+);
+CREATE INDEX IF NOT EXISTS idx_gh_subs_guild ON github_subscriptions (guild_id);
+
+-- GitHub poll state — tracks last-seen etag/timestamp per repo per event type
+CREATE TABLE IF NOT EXISTS github_poll_state (
+    repo        TEXT    NOT NULL,
+    event_type  TEXT    NOT NULL,   -- push, pull_request, issues, release
+    last_id     TEXT,               -- last processed event/item ID
+    etag        TEXT,               -- HTTP ETag for conditional requests
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo, event_type)
+);
 """
 
 
@@ -230,7 +333,18 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
+        await self._migrate()
         logger.info("Database ready at %s", DB_PATH)
+
+    async def _migrate(self) -> None:
+        """Apply incremental schema migrations for existing databases."""
+        # Add source_url to embeddings if it doesn't exist yet
+        cur = await self._db.execute("PRAGMA table_info(embeddings)")  # type: ignore[union-attr]
+        cols = {row[1] for row in await cur.fetchall()}
+        if "source_url" not in cols:
+            await self._db.execute("ALTER TABLE embeddings ADD COLUMN source_url TEXT")  # type: ignore[union-attr]
+            await self._db.commit()
+            logger.info("Migration: added source_url column to embeddings")
 
     async def close(self) -> None:
         if self._db:
@@ -252,6 +366,21 @@ class Database:
         )
         row = await cur.fetchone()
         return row["value"] if row else None
+
+    async def get_setting(self, guild_id: int, key: str) -> str:
+        """Return DB value for *key*, falling back to ``DEFAULTS[key]``."""
+        from bot.config import DEFAULTS
+
+        val = await self.get_guild_config(guild_id, key)
+        return val if val is not None else DEFAULTS.get(key, "")
+
+    async def get_setting_int(self, guild_id: int, key: str) -> int:
+        """Like :meth:`get_setting` but coerced to int."""
+        return int(await self.get_setting(guild_id, key))
+
+    async def get_setting_float(self, guild_id: int, key: str) -> float:
+        """Like :meth:`get_setting` but coerced to float."""
+        return float(await self.get_setting(guild_id, key))
 
     async def set_guild_config(self, guild_id: int, key: str, value: str) -> None:
         await self.conn.execute(
@@ -578,12 +707,18 @@ class Database:
     # ------------------------------------------------------------------
 
     async def add_embedding(
-        self, guild_id: int, name: str, text: str, embedding: bytes | None, model: str | None
+        self,
+        guild_id: int,
+        name: str,
+        text: str,
+        embedding: bytes | None,
+        model: str | None,
+        source_url: str | None = None,
     ) -> bool:
         try:
             await self.conn.execute(
-                "INSERT INTO embeddings (guild_id, name, text, embedding, model) VALUES (?, ?, ?, ?, ?)",
-                (guild_id, name, text, embedding, model),
+                "INSERT INTO embeddings (guild_id, name, text, embedding, model, source_url) VALUES (?, ?, ?, ?, ?, ?)",
+                (guild_id, name, text, embedding, model, source_url),
             )
             await self.conn.commit()
             return True
@@ -591,11 +726,17 @@ class Database:
             return False
 
     async def update_embedding(
-        self, guild_id: int, name: str, text: str, embedding: bytes | None, model: str | None
+        self,
+        guild_id: int,
+        name: str,
+        text: str,
+        embedding: bytes | None,
+        model: str | None,
+        source_url: str | None = None,
     ) -> bool:
         cur = await self.conn.execute(
-            "UPDATE embeddings SET text = ?, embedding = ?, model = ? WHERE guild_id = ? AND name = ?",
-            (text, embedding, model, guild_id, name),
+            "UPDATE embeddings SET text = ?, embedding = ?, model = ?, source_url = ? WHERE guild_id = ? AND name = ?",
+            (text, embedding, model, source_url, guild_id, name),
         )
         await self.conn.commit()
         return cur.rowcount > 0
@@ -622,9 +763,55 @@ class Database:
         )
         return await cur.fetchall()
 
+    async def delete_embeddings_by_source(self, guild_id: int, source_url: str) -> int:
+        cur = await self.conn.execute(
+            "DELETE FROM embeddings WHERE guild_id = ? AND source_url = ?",
+            (guild_id, source_url),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
     async def reset_embeddings(self, guild_id: int) -> int:
         cur = await self.conn.execute(
             "DELETE FROM embeddings WHERE guild_id = ?", (guild_id,)
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Crawl sources
+    # ------------------------------------------------------------------
+
+    async def upsert_crawl_source(
+        self, guild_id: int, url: str, title: str, chunk_count: int
+    ) -> None:
+        await self.conn.execute(
+            "INSERT INTO crawl_sources (guild_id, url, title, chunk_count, crawled_at) "
+            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(guild_id, url) DO UPDATE SET "
+            "title = excluded.title, chunk_count = excluded.chunk_count, crawled_at = excluded.crawled_at",
+            (guild_id, url, title, chunk_count),
+        )
+        await self.conn.commit()
+
+    async def get_crawl_sources(self, guild_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM crawl_sources WHERE guild_id = ? ORDER BY crawled_at DESC",
+            (guild_id,),
+        )
+        return await cur.fetchall()
+
+    async def delete_crawl_source(self, guild_id: int, url: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM crawl_sources WHERE guild_id = ? AND url = ?",
+            (guild_id, url),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def reset_crawl_sources(self, guild_id: int) -> int:
+        cur = await self.conn.execute(
+            "DELETE FROM crawl_sources WHERE guild_id = ?", (guild_id,)
         )
         await self.conn.commit()
         return cur.rowcount
@@ -991,3 +1178,353 @@ class Database:
             if p["target_type"] == "role" and p["target_id"] in role_ids:
                 return bool(p["allowed"])
         return None
+
+    # ------------------------------------------------------------------
+    # Leveling / XP
+    # ------------------------------------------------------------------
+
+    async def get_level_row(self, guild_id: int, user_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM levels WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        return await cur.fetchone()
+
+    async def ensure_level_row(self, guild_id: int, user_id: int) -> None:
+        await self.conn.execute(
+            "INSERT OR IGNORE INTO levels (guild_id, user_id) VALUES (?, ?)",
+            (guild_id, user_id),
+        )
+        await self.conn.commit()
+
+    async def add_xp(self, guild_id: int, user_id: int, amount: int, last_xp_at: str) -> dict:
+        """Add XP and return updated row as dict."""
+        await self.ensure_level_row(guild_id, user_id)
+        await self.conn.execute(
+            "UPDATE levels SET xp = xp + ?, last_xp_at = ? WHERE guild_id = ? AND user_id = ?",
+            (amount, last_xp_at, guild_id, user_id),
+        )
+        await self.conn.commit()
+        row = await self.get_level_row(guild_id, user_id)
+        return dict(row)
+
+    async def set_level(self, guild_id: int, user_id: int, level: int) -> None:
+        await self.conn.execute(
+            "UPDATE levels SET level = ? WHERE guild_id = ? AND user_id = ?",
+            (level, guild_id, user_id),
+        )
+        await self.conn.commit()
+
+    async def set_xp(self, guild_id: int, user_id: int, xp: int, level: int) -> None:
+        await self.ensure_level_row(guild_id, user_id)
+        await self.conn.execute(
+            "UPDATE levels SET xp = ?, level = ? WHERE guild_id = ? AND user_id = ?",
+            (xp, level, guild_id, user_id),
+        )
+        await self.conn.commit()
+
+    async def get_level_leaderboard(self, guild_id: int, limit: int = 10):
+        cur = await self.conn.execute(
+            "SELECT user_id, xp, level FROM levels WHERE guild_id = ? ORDER BY xp DESC LIMIT ?",
+            (guild_id, limit),
+        )
+        return await cur.fetchall()
+
+    async def get_level_rank(self, guild_id: int, user_id: int) -> int:
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM levels WHERE guild_id = ? AND xp > "
+            "(SELECT xp FROM levels WHERE guild_id = ? AND user_id = ?)",
+            (guild_id, guild_id, user_id),
+        )
+        row = await cur.fetchone()
+        return (row[0] + 1) if row else 1
+
+    async def reset_levels(self, guild_id: int) -> int:
+        cur = await self.conn.execute("DELETE FROM levels WHERE guild_id = ?", (guild_id,))
+        await self.conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Giveaways
+    # ------------------------------------------------------------------
+
+    async def create_giveaway(
+        self,
+        guild_id: int,
+        channel_id: int,
+        prize: str,
+        end_time: str,
+        winner_count: int,
+        host_id: int,
+    ) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO giveaways (guild_id, channel_id, prize, end_time, winner_count, host_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, channel_id, prize, end_time, winner_count, host_id),
+        )
+        await self.conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def set_giveaway_message(self, giveaway_id: int, message_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE giveaways SET message_id = ? WHERE id = ?",
+            (message_id, giveaway_id),
+        )
+        await self.conn.commit()
+
+    async def get_giveaway(self, giveaway_id: int):
+        cur = await self.conn.execute("SELECT * FROM giveaways WHERE id = ?", (giveaway_id,))
+        return await cur.fetchone()
+
+    async def get_active_giveaways(self, guild_id: int | None = None):
+        if guild_id:
+            cur = await self.conn.execute(
+                "SELECT * FROM giveaways WHERE status = 'active' AND guild_id = ?", (guild_id,)
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT * FROM giveaways WHERE status = 'active'"
+            )
+        return await cur.fetchall()
+
+    async def end_giveaway(self, giveaway_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE giveaways SET status = 'ended' WHERE id = ?", (giveaway_id,)
+        )
+        await self.conn.commit()
+
+    async def enter_giveaway(self, giveaway_id: int, user_id: int) -> bool:
+        try:
+            await self.conn.execute(
+                "INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)",
+                (giveaway_id, user_id),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def leave_giveaway(self, giveaway_id: int, user_id: int) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?",
+            (giveaway_id, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_giveaway_entries(self, giveaway_id: int) -> list[int]:
+        cur = await self.conn.execute(
+            "SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?", (giveaway_id,)
+        )
+        rows = await cur.fetchall()
+        return [r["user_id"] for r in rows]
+
+    async def get_giveaway_entry_count(self, giveaway_id: int) -> int:
+        cur = await self.conn.execute(
+            "SELECT COUNT(*) FROM giveaway_entries WHERE giveaway_id = ?", (giveaway_id,)
+        )
+        row = await cur.fetchone()
+        return row[0] if row else 0
+
+    # ------------------------------------------------------------------
+    # Reminders
+    # ------------------------------------------------------------------
+
+    async def create_reminder(
+        self,
+        user_id: int,
+        message: str,
+        end_time: str,
+        guild_id: int | None = None,
+        channel_id: int | None = None,
+    ) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO reminders (user_id, guild_id, channel_id, message, end_time) VALUES (?, ?, ?, ?, ?)",
+            (user_id, guild_id, channel_id, message, end_time),
+        )
+        await self.conn.commit()
+        return cur.lastrowid  # type: ignore[return-value]
+
+    async def get_due_reminders(self, now: str):
+        cur = await self.conn.execute(
+            "SELECT * FROM reminders WHERE end_time <= ? ORDER BY end_time",
+            (now,),
+        )
+        return await cur.fetchall()
+
+    async def delete_reminder(self, reminder_id: int) -> None:
+        await self.conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        await self.conn.commit()
+
+    async def get_user_reminders(self, user_id: int) -> list:
+        cur = await self.conn.execute(
+            "SELECT * FROM reminders WHERE user_id = ? ORDER BY end_time",
+            (user_id,),
+        )
+        return await cur.fetchall()
+
+    # ------------------------------------------------------------------
+    # Starboard
+    # ------------------------------------------------------------------
+
+    async def get_starboard_message(self, message_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM starboard_messages WHERE message_id = ?", (message_id,)
+        )
+        return await cur.fetchone()
+
+    async def upsert_starboard_message(
+        self,
+        message_id: int,
+        guild_id: int,
+        channel_id: int,
+        author_id: int,
+        star_count: int,
+        starboard_msg_id: int | None = None,
+    ) -> None:
+        await self.conn.execute(
+            "INSERT INTO starboard_messages (message_id, guild_id, channel_id, author_id, star_count, starboard_msg_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(message_id) DO UPDATE SET "
+            "star_count = excluded.star_count, starboard_msg_id = COALESCE(excluded.starboard_msg_id, starboard_msg_id)",
+            (message_id, guild_id, channel_id, author_id, star_count, starboard_msg_id),
+        )
+        await self.conn.commit()
+
+    async def set_starboard_msg_id(self, message_id: int, starboard_msg_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE starboard_messages SET starboard_msg_id = ? WHERE message_id = ?",
+            (starboard_msg_id, message_id),
+        )
+        await self.conn.commit()
+
+    async def delete_starboard_message(self, message_id: int) -> None:
+        await self.conn.execute(
+            "DELETE FROM starboard_messages WHERE message_id = ?", (message_id,)
+        )
+        await self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Highlights / keyword notifications
+    # ------------------------------------------------------------------
+
+    async def add_highlight(self, user_id: int, guild_id: int, keyword: str) -> bool:
+        try:
+            await self.conn.execute(
+                "INSERT INTO highlights (user_id, guild_id, keyword) VALUES (?, ?, ?)",
+                (user_id, guild_id, keyword.lower()),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def remove_highlight(self, user_id: int, guild_id: int, keyword: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM highlights WHERE user_id = ? AND guild_id = ? AND keyword = ?",
+            (user_id, guild_id, keyword.lower()),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_user_highlights(self, user_id: int, guild_id: int) -> list[str]:
+        cur = await self.conn.execute(
+            "SELECT keyword FROM highlights WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        rows = await cur.fetchall()
+        return [r["keyword"] for r in rows]
+
+    async def get_guild_highlights(self, guild_id: int):
+        """Return all highlight rows for a guild — used for on_message scanning."""
+        cur = await self.conn.execute(
+            "SELECT user_id, keyword FROM highlights WHERE guild_id = ?", (guild_id,)
+        )
+        return await cur.fetchall()
+
+    async def clear_user_highlights(self, user_id: int, guild_id: int) -> int:
+        cur = await self.conn.execute(
+            "DELETE FROM highlights WHERE user_id = ? AND guild_id = ?",
+            (user_id, guild_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # GitHub subscriptions
+    # ------------------------------------------------------------------
+
+    async def add_github_subscription(
+        self,
+        guild_id: int,
+        channel_id: int,
+        repo: str,
+        events: str,
+        added_by: int,
+    ) -> bool:
+        try:
+            await self.conn.execute(
+                "INSERT INTO github_subscriptions (guild_id, channel_id, repo, events, added_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (guild_id, channel_id, repo, events, added_by),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def update_github_subscription_events(
+        self, guild_id: int, channel_id: int, repo: str, events: str
+    ) -> bool:
+        cur = await self.conn.execute(
+            "UPDATE github_subscriptions SET events = ? "
+            "WHERE guild_id = ? AND channel_id = ? AND repo = ?",
+            (events, guild_id, channel_id, repo),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def remove_github_subscription(
+        self, guild_id: int, channel_id: int, repo: str
+    ) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM github_subscriptions WHERE guild_id = ? AND channel_id = ? AND repo = ?",
+            (guild_id, channel_id, repo),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_github_subscriptions(self, guild_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM github_subscriptions WHERE guild_id = ? ORDER BY repo",
+            (guild_id,),
+        )
+        return await cur.fetchall()
+
+    async def get_all_github_subscriptions(self):
+        """Return every subscription across all guilds (used by poller)."""
+        cur = await self.conn.execute("SELECT * FROM github_subscriptions")
+        return await cur.fetchall()
+
+    # ------------------------------------------------------------------
+    # GitHub poll state
+    # ------------------------------------------------------------------
+
+    async def get_github_poll_state(self, repo: str, event_type: str):
+        cur = await self.conn.execute(
+            "SELECT * FROM github_poll_state WHERE repo = ? AND event_type = ?",
+            (repo, event_type),
+        )
+        return await cur.fetchone()
+
+    async def set_github_poll_state(
+        self, repo: str, event_type: str, last_id: str | None, etag: str | None
+    ) -> None:
+        await self.conn.execute(
+            "INSERT INTO github_poll_state (repo, event_type, last_id, etag, updated_at) "
+            "VALUES (?, ?, ?, ?, datetime('now')) "
+            "ON CONFLICT(repo, event_type) DO UPDATE SET "
+            "last_id = excluded.last_id, etag = excluded.etag, updated_at = excluded.updated_at",
+            (repo, event_type, last_id, etag),
+        )
+        await self.conn.commit()

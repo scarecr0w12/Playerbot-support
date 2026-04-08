@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 import discord
+import uvicorn
 from discord.ext import commands
 
 from bot.config import Config
@@ -30,6 +32,12 @@ from bot.cogs.economy import EconomyCog
 from bot.cogs.reports import ReportsCog
 from bot.cogs.utility import UtilityCog
 from bot.cogs.permissions import PermissionsCog
+from bot.cogs.levels import LevelsCog
+from bot.cogs.giveaways import GiveawayCog
+from bot.cogs.reminders import RemindersCog
+from bot.cogs.starboard import StarboardCog
+from bot.cogs.highlights import HighlightsCog
+from bot.cogs.github import GitHubCog
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,19 +63,53 @@ async def main() -> None:
 
     bot = commands.Bot(command_prefix="!", intents=intents)
 
+    async def _seed_guild(guild_id: int) -> None:
+        """Insert a sentinel row so the dashboard can discover this guild."""
+        await db.conn.execute(
+            "INSERT OR IGNORE INTO guild_config (guild_id, key, value) VALUES (?, 'registered', '1')",
+            (guild_id,),
+        )
+        await db.conn.commit()
+
     @bot.event
     async def on_ready() -> None:
         logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id if bot.user else "?")
         synced = await bot.tree.sync()
         logger.info("Synced %d slash command(s)", len(synced))
         logger.info("Bot is ready — %d cog(s) loaded", len(bot.cogs))
+        for guild in bot.guilds:
+            await _seed_guild(guild.id)
+        logger.info("Seeded %d guild(s) into guild_config", len(bot.guilds))
+        if bot.user:
+            permissions = discord.Permissions(
+                send_messages=True,
+                read_messages=True,
+                manage_messages=True,
+                manage_channels=True,
+                manage_roles=True,
+                kick_members=True,
+                ban_members=True,
+                moderate_members=True,
+                embed_links=True,
+                attach_files=True,
+                read_message_history=True,
+                add_reactions=True,
+                use_application_commands=True,
+            )
+            invite_url = discord.utils.oauth_url(bot.user.id, permissions=permissions)
+            logger.info("Invite URL: %s", invite_url)
+
+    @bot.event
+    async def on_guild_join(guild: discord.Guild) -> None:
+        await _seed_guild(guild.id)
+        logger.info("Joined guild %s (%d) — seeded guild_config", guild.name, guild.id)
 
     # --- Register cogs (order matters: mod_logging & permissions first) ---
     await bot.add_cog(ModLoggingCog(bot, db))
     await bot.add_cog(PermissionsCog(bot, db))
-    await bot.add_cog(ModerationCog(bot, db, config))
+    await bot.add_cog(ModerationCog(bot, db))
     await bot.add_cog(TicketsCog(bot, db))
-    await bot.add_cog(AutoModCog(bot, db, config))
+    await bot.add_cog(AutoModCog(bot, db))
     await bot.add_cog(WelcomeCog(bot, db))
     await bot.add_cog(AdminCog(bot, db))
     await bot.add_cog(CleanupCog(bot, db))
@@ -75,7 +117,13 @@ async def main() -> None:
     await bot.add_cog(EconomyCog(bot, db))
     await bot.add_cog(ReportsCog(bot, db))
     await bot.add_cog(UtilityCog(bot))
-    await bot.add_cog(SupportCog(bot, db, llm, config))
+    await bot.add_cog(SupportCog(bot, db, llm))
+    await bot.add_cog(LevelsCog(bot, db))
+    await bot.add_cog(GiveawayCog(bot, db))
+    await bot.add_cog(RemindersCog(bot, db))
+    await bot.add_cog(StarboardCog(bot, db))
+    await bot.add_cog(HighlightsCog(bot, db))
+    await bot.add_cog(GitHubCog(bot, db, config))
 
     # --- Bot-level interaction check for custom permission overrides ---
     @bot.tree.interaction_check
@@ -90,6 +138,22 @@ async def main() -> None:
             )
             return False
         return True
+
+    # --- Dashboard (run in thread to avoid blocking bot loop) ---
+    import threading
+    dashboard_host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+    dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    
+    def run_dashboard():
+        uvicorn.run(
+            "dashboard.app:app",
+            host=dashboard_host,
+            port=dashboard_port,
+            log_level="warning",
+        )
+    
+    dashboard_thread = threading.Thread(target=run_dashboard, daemon=True)
+    dashboard_thread.start()
 
     try:
         await bot.start(config.discord_token)

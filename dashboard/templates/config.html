@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Guild Config — Bot Dashboard{% endblock %}
+{% block header %}Guild Configuration{% endblock %}
+
+{% block content %}
+<div class="flex flex-col xl:flex-row gap-6">
+  <!-- Guild selector -->
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        {% for g in guilds %}
+        <a href="/config?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Config table -->
+  <div class="flex-1">
+    {% if guild_id %}
+    <!-- Add key -->
+    <div class="card p-5 mb-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Set / Update Config Key</h3>
+      <form method="post" action="/config/set" class="flex flex-wrap gap-3 items-end">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div class="flex-1 min-w-[160px]">
+          <label class="text-xs text-gray-500 mb-1 block">Key</label>
+          <input type="text" name="key" class="input" placeholder="e.g. mod_log_channel_id" required/>
+        </div>
+        <div class="flex-1 min-w-[160px]">
+          <label class="text-xs text-gray-500 mb-1 block">Value</label>
+          <input type="text" name="value" class="input" placeholder="Value" required/>
+        </div>
+        <button type="submit" class="btn-primary"><i class="fa fa-check"></i> Save</button>
+      </form>
+    </div>
+
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <h2 class="font-semibold text-white">Config for Guild <span class="font-mono text-[#5865F2]">{{ guild_id }}</span></h2>
+        <span class="text-xs text-gray-500">{{ config_rows|length }} keys</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+              <th class="px-5 py-3 font-medium">Key</th>
+              <th class="px-5 py-3 font-medium">Value</th>
+              <th class="px-5 py-3 font-medium w-16">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in config_rows %}
+            <tr class="table-row">
+              <td class="px-5 py-3 text-gray-300 font-mono text-xs">{{ row.key }}</td>
+              <td class="px-5 py-3 text-gray-400 max-w-[400px] break-all text-xs">{{ row.value }}</td>
+              <td class="px-5 py-3">
+                <form method="post" action="/config/delete" onsubmit="return confirm('Delete key {{ row.key }}?')">
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <input type="hidden" name="key" value="{{ row.key }}"/>
+                  <button class="btn-danger"><i class="fa fa-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="px-5 py-8 text-center text-gray-500">No config keys set</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% else %}
+    <div class="card p-12 text-center">
+      <i class="fa fa-sliders text-4xl text-gray-700 mb-3"></i>
+      <p class="text-gray-400">Select a guild to view and edit its configuration.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -16,7 +16,6 @@ from discord import app_commands
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from bot.config import Config
     from bot.database import Database
     from bot.cogs.mod_logging import ModLoggingCog
 
@@ -28,10 +27,9 @@ URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 class AutoModCog(commands.Cog, name="AutoMod"):
     """Automatic moderation: spam, word filter, link filter."""
 
-    def __init__(self, bot: commands.Bot, db: Database, config: Config) -> None:
+    def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
         self.db = db
-        self.config = config
 
         # Spam tracking: guild_id -> user_id -> list of timestamps
         self._spam_tracker: dict[int, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
@@ -187,17 +185,18 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         guild_id = message.guild.id  # type: ignore[union-attr]
         user_id = message.author.id
         now = time.time()
-        window = self.config.automod_spam_interval
+        window = await self.db.get_setting_int(guild_id, "automod_spam_interval")
+        threshold = await self.db.get_setting_int(guild_id, "automod_spam_threshold")
 
         timestamps = self._spam_tracker[guild_id][user_id]
         timestamps.append(now)
         # Prune old timestamps
         self._spam_tracker[guild_id][user_id] = [t for t in timestamps if now - t < window]
 
-        if len(self._spam_tracker[guild_id][user_id]) >= self.config.automod_spam_threshold:
+        if len(self._spam_tracker[guild_id][user_id]) >= threshold:
             self._spam_tracker[guild_id][user_id] = []
             await self._handle_violation(
-                message, "spam", f"Sent {self.config.automod_spam_threshold}+ messages in {window}s"
+                message, "spam", f"Sent {threshold}+ messages in {window}s"
             )
 
     async def _handle_violation(self, message: discord.Message, violation_type: str, detail: str) -> None:
@@ -221,3 +220,42 @@ class AutoModCog(commands.Cog, name="AutoMod"):
                 target=message.author,
                 extra=f"**Type:** {violation_type}\n**Detail:** {detail}\n**Channel:** {message.channel.mention}",
             )
+
+    # ------------------------------------------------------------------
+    # /automodset  –  admin commands to configure automod per-guild
+    # ------------------------------------------------------------------
+
+    automodset_group = app_commands.Group(name="automodset", description="Auto-mod settings (admin)")
+
+    @automodset_group.command(name="spam_threshold", description="Set messages count that triggers spam detection")
+    @app_commands.describe(count="Number of messages within the interval to flag as spam")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_spam_threshold(self, interaction: discord.Interaction, count: int) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "automod_spam_threshold", str(count))  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Spam threshold set to **{count}** messages.", ephemeral=True
+        )
+
+    @automodset_group.command(name="spam_interval", description="Set time window (seconds) for spam detection")
+    @app_commands.describe(seconds="Time window in seconds")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_spam_interval(self, interaction: discord.Interaction, seconds: int) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "automod_spam_interval", str(seconds))  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Spam interval set to **{seconds}** second(s).", ephemeral=True
+        )
+
+    @automodset_group.command(name="show", description="Show current auto-mod settings")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def show_automod_settings(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        assert guild_id is not None
+        threshold = await self.db.get_setting(guild_id, "automod_spam_threshold")
+        interval = await self.db.get_setting(guild_id, "automod_spam_interval")
+        enabled_raw = await self.db.get_guild_config(guild_id, "automod_enabled")
+        enabled = "Disabled" if enabled_raw == "0" else "Enabled"
+        embed = discord.Embed(title="⚙️ Auto-Mod Settings", color=discord.Color.orange())
+        embed.add_field(name="Status", value=enabled, inline=True)
+        embed.add_field(name="Spam threshold", value=f"{threshold} messages", inline=True)
+        embed.add_field(name="Spam interval", value=f"{interval} second(s)", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)

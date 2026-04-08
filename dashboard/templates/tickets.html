@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Tickets — Bot Dashboard{% endblock %}
+{% block header %}Support Tickets{% endblock %}
+
+{% block content %}
+<div class="card p-4 mb-4">
+  <form method="get" action="/tickets" class="flex flex-wrap gap-3 items-end">
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Guild</label>
+      <select name="guild_id" class="input w-48" onchange="this.form.submit()">
+        <option value="">Select guild</option>
+        {% for g in guilds %}
+        <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="text-xs text-gray-500 mb-1 block">Status</label>
+      <select name="status" class="input w-36">
+        <option value="open" {% if status == 'open' %}selected{% endif %}>Open</option>
+        <option value="claimed" {% if status == 'claimed' %}selected{% endif %}>Claimed</option>
+        <option value="closed" {% if status == 'closed' %}selected{% endif %}>Closed</option>
+        <option value="all" {% if status == 'all' %}selected{% endif %}>All</option>
+      </select>
+    </div>
+    <button type="submit" class="btn-primary"><i class="fa fa-filter"></i> Filter</button>
+  </form>
+</div>
+
+<div class="card overflow-hidden">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+    <h2 class="font-semibold text-white">Tickets</h2>
+    <span class="text-xs text-gray-500">{{ tickets|length }} shown</span>
+  </div>
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+        <th class="px-4 py-3 font-medium">#</th>
+        <th class="px-4 py-3 font-medium">Status</th>
+        <th class="px-4 py-3 font-medium">User ID</th>
+        <th class="px-4 py-3 font-medium">Subject</th>
+        <th class="px-4 py-3 font-medium">Claimed By</th>
+        <th class="px-4 py-3 font-medium">Created</th>
+        <th class="px-4 py-3 font-medium">Transcript</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tickets %}
+      {% set sc = {"open": ("#10b981","Open"), "claimed": ("#5865F2","Claimed"), "closed": ("#6b7280","Closed")} %}
+      <tr class="table-row">
+        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ t.id }}</td>
+        <td class="px-4 py-3">
+          <span class="badge" style="background:{{ sc.get(t.status,('#6b7280','?'))[0] }}22;color:{{ sc.get(t.status,('#6b7280','?'))[0] }};">
+            {{ sc.get(t.status, ('#6b7280', t.status))[1] }}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-gray-300 font-mono text-xs">{{ t.user_id }}</td>
+        <td class="px-4 py-3 text-gray-400 max-w-xs truncate text-xs">{{ t.subject or "—" }}</td>
+        <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ t.claimed_by or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ t.created_at[:16] if t.created_at else "—" }}</td>
+        <td class="px-4 py-3">
+          <a href="/tickets/{{ t.id }}/transcript" class="btn-success" style="text-decoration:none;">
+            <i class="fa fa-scroll"></i> View
+          </a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="px-4 py-10 text-center text-gray-500">No tickets found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
