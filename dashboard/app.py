@@ -30,6 +30,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from dashboard.dynamic_config_schema import DynamicConfigSchema
+from dashboard.routes.github_integrations import GitHubIntegrationsModule
 from bot.config import Config
 from bot.model_discovery import ModelDiscoveryService
 
@@ -277,8 +278,6 @@ GUILD_ID_QUERIES = [
     "SELECT DISTINCT guild_id FROM crawl_sources WHERE guild_id IS NOT NULL",
 ]
 
-GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$")
-VALID_GITHUB_EVENTS = {"push", "pull_request", "issues", "release"}
 LEGACY_UNKNOWN_EMBEDDING_MODEL = "legacy-unknown"
 SQLITE_SOURCE_TABLE_RE = re.compile(r"FROM\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 
@@ -346,13 +345,6 @@ def parse_csv_ids(value: str | None) -> list[int]:
         except ValueError:
             continue
     return ids
-
-
-def normalise_github_events(raw: str) -> str:
-    events = {event.strip().lower() for event in raw.split(",") if event.strip()}
-    valid = sorted(events & VALID_GITHUB_EVENTS)
-    return ",".join(valid)
-
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -640,18 +632,6 @@ async def clear_knowledge_base(guild_id: int, qdrant: Any | None = None) -> dict
         "crawled_chunks_cleared": int(row["crawled_count"]),
         "sources_cleared": int(source_row["source_count"]),
     }
-
-
-async def github_subscription_exists(guild_id: int, repo: str) -> bool:
-    row = await db_fetchone(
-        "SELECT 1 AS ok FROM github_subscriptions WHERE guild_id = ? AND repo = ? LIMIT 1",
-        (guild_id, repo),
-    )
-    return bool(row)
-
-
-async def reset_github_poll_state(repo: str) -> int:
-    return await db_execute("DELETE FROM github_poll_state WHERE repo = ?", (repo,))
 
 
 # ---------------------------------------------------------------------------
@@ -1255,97 +1235,29 @@ async def community_starboard_save(
 # Integrations management
 # ---------------------------------------------------------------------------
 
-@app.get("/integrations", response_class=HTMLResponse)
-async def integrations_page(request: Request, guild_id: int | None = None):
-    if r := auth_redirect(request):
-        return r
+github_integrations = GitHubIntegrationsModule(
+    templates=templates,
+    ctx=ctx,
+    auth_redirect=auth_redirect,
+    get_authorized_guilds=get_authorized_guilds,
+    get_guild_config_map=get_guild_config_map,
+    require_guild_access=require_guild_access,
+    db_fetchall=db_fetchall,
+    db_fetchone=db_fetchone,
+    db_execute=db_execute,
+    github_token=config.github_token,
+    github_token_configured=bool(config.github_token),
+)
+app.include_router(github_integrations.router)
 
-    guilds = await get_authorized_guilds(request, guild_id)
-    subscriptions: list[dict] = []
-    poll_state: list[dict] = []
-
-    if guild_id:
-        subscriptions = await db_fetchall(
-            "SELECT * FROM github_subscriptions WHERE guild_id = ? ORDER BY repo, channel_id",
-            (guild_id,),
-        )
-        state_rows = await db_fetchall("SELECT * FROM github_poll_state ORDER BY updated_at DESC")
-        repos = {row["repo"] for row in subscriptions}
-        poll_state = [row for row in state_rows if row["repo"] in repos]
-
-    return templates.TemplateResponse(request, "integrations.html", ctx({
-        "guilds": guilds,
-        "guild_id": guild_id,
-        "subscriptions": subscriptions,
-        "poll_state": poll_state,
-        "github_token_configured": bool(config.github_token),
-        "active_page": "integrations",
-    }))
-
-
-@app.post("/integrations/github/save")
-async def integrations_github_save(
-    request: Request,
-    guild_id: int = Form(...),
-    channel_id: int = Form(...),
-    repo: str = Form(...),
-    events: str = Form(...),
-):
-    if r := auth_redirect(request):
-        return r
-    await require_guild_access(request, guild_id)
-    repo = repo.strip()
-    if not GITHUB_REPO_RE.match(repo):
-        raise HTTPException(status_code=400, detail="Invalid repo format")
-    events_value = normalise_github_events(events) or "push,pull_request,issues,release"
-    await db_execute(
-        "INSERT INTO github_subscriptions (guild_id, channel_id, repo, events, added_by) VALUES (?, ?, ?, ?, 0) "
-        "ON CONFLICT(guild_id, channel_id, repo) DO UPDATE SET events = excluded.events",
-        (guild_id, channel_id, repo, events_value),
-    )
-    return RedirectResponse(f"/integrations?guild_id={guild_id}", status_code=302)
-
-
-@app.post("/integrations/github/delete")
-async def integrations_github_delete(request: Request, guild_id: int = Form(...), subscription_id: int = Form(...)):
-    if r := auth_redirect(request):
-        return r
-    await require_guild_access(request, guild_id)
-    row = await db_fetchone(
-        "SELECT repo FROM github_subscriptions WHERE id = ? AND guild_id = ?",
-        (subscription_id, guild_id),
-    )
-    deleted = await db_execute(
-        "DELETE FROM github_subscriptions WHERE id = ? AND guild_id = ?",
-        (subscription_id, guild_id),
-    )
-    repo = row["repo"] if row else None
-    if deleted and repo:
-        remaining = await db_fetchone(
-            "SELECT COUNT(*) AS c FROM github_subscriptions WHERE repo = ?",
-            (repo,),
-        )
-        if not remaining or remaining["c"] == 0:
-            await db_execute("DELETE FROM github_poll_state WHERE repo = ?", (repo,))
-    return RedirectResponse(f"/integrations?guild_id={guild_id}", status_code=302)
-
-
-@app.post("/integrations/github/reset_state")
-async def integrations_github_reset_state(
-    request: Request,
-    guild_id: int = Form(...),
-    repo: str = Form(...),
-):
-    if r := auth_redirect(request):
-        return r
-    await require_guild_access(request, guild_id)
-    repo = repo.strip()
-    if not GITHUB_REPO_RE.match(repo):
-        raise HTTPException(status_code=400, detail="Invalid repo format")
-    if not await github_subscription_exists(guild_id, repo):
-        raise HTTPException(status_code=404, detail="Subscription not found for repo in this guild")
-    await reset_github_poll_state(repo)
-    return RedirectResponse(f"/integrations?guild_id={guild_id}", status_code=302)
+# Backward-compatible aliases for tests and existing imports.
+integrations_page = github_integrations.integrations_page
+integrations_github_save = github_integrations.integrations_github_save
+integrations_github_delete = github_integrations.integrations_github_delete
+integrations_github_reset_state = github_integrations.integrations_github_reset_state
+integrations_github_workflow_save = github_integrations.integrations_github_workflow_save
+integrations_github_user_link_save = github_integrations.integrations_github_user_link_save
+integrations_github_user_link_delete = github_integrations.integrations_github_user_link_delete
 
 
 # ---------------------------------------------------------------------------

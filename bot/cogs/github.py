@@ -29,8 +29,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote_plus
 
 import aiohttp
 import discord
@@ -53,6 +54,10 @@ POLL_INTERVAL_SECONDS = 60
 MAX_ISSUES_LISTED = 8
 MAX_RELEASES_LISTED = 5
 MAX_SEARCH_RESULTS = 6
+MAX_REVIEW_QUEUE_PRS = 10
+MAX_TRIAGE_ITEMS = 5
+DEFAULT_REVIEW_DIGEST_HOUR_UTC = 13
+ISSUE_TEMPLATE_KEYS = ("bug", "feature", "docs")
 GITHUB_COLOR = 0x24292E
 _VALID_EVENTS = {"push", "pull_request", "issues", "release"}
 _DEFAULT_EVENTS = "push,pull_request,issues,release"
@@ -84,6 +89,241 @@ def _trunc(text: str | None, n: int = 200) -> str:
 
 def _repo_color(repo_data: dict) -> int:
     return GITHUB_COLOR
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _requested_reviewer_names(pr_data: dict) -> list[str]:
+    names: list[str] = []
+    for reviewer in pr_data.get("requested_reviewers") or []:
+        login = reviewer.get("login")
+        if login:
+            names.append(login)
+    for team in pr_data.get("requested_teams") or []:
+        slug = team.get("slug")
+        if slug:
+            names.append(f"team:{slug}")
+    return names
+
+
+def _summarize_reviews(reviews: list[dict]) -> tuple[int, bool]:
+    latest_by_user: dict[str, tuple[datetime, str]] = {}
+    for review in reviews:
+        user = review.get("user") or {}
+        login = user.get("login")
+        submitted_at = _parse_iso_dt(review.get("submitted_at")) or datetime.min.replace(tzinfo=timezone.utc)
+        state = str(review.get("state") or "").upper()
+        if not login or not state:
+            continue
+        previous = latest_by_user.get(login)
+        if previous is None or submitted_at >= previous[0]:
+            latest_by_user[login] = (submitted_at, state)
+
+    latest_states = [state for _, state in latest_by_user.values()]
+    approvals = sum(1 for state in latest_states if state == "APPROVED")
+    changes_requested = any(state == "CHANGES_REQUESTED" for state in latest_states)
+    return approvals, changes_requested
+
+
+def _review_bucket(pr_data: dict, reviews: list[dict], stale_cutoff: datetime) -> str:
+    if pr_data.get("draft"):
+        return "draft"
+
+    approvals, changes_requested = _summarize_reviews(reviews)
+    if changes_requested:
+        return "changes_requested"
+    if _requested_reviewer_names(pr_data):
+        return "review_requested"
+    if approvals > 0:
+        return "approved"
+
+    updated_at = _parse_iso_dt(pr_data.get("updated_at"))
+    if updated_at and updated_at <= stale_cutoff:
+        return "stale"
+    return "waiting"
+
+
+def _review_value(pr_data: dict, reviews: list[dict]) -> str:
+    author = (pr_data.get("user") or {}).get("login", "?")
+    updated_at = _ts(pr_data.get("updated_at"))
+    requested = _requested_reviewer_names(pr_data)
+    approvals, changes_requested = _summarize_reviews(reviews)
+    parts = [f"[View]({pr_data.get('html_url', '')})  •  by `{author}`  •  updated {updated_at}"]
+    if requested:
+        parts.append(f"Requested: {', '.join(f'`{name}`' for name in requested[:4])}")
+    if changes_requested:
+        parts.append("Status: `changes requested`")
+    elif approvals:
+        parts.append(f"Approvals: `{approvals}`")
+    return "\n".join(parts)
+
+
+def _review_load_lines(
+    queue: list[tuple[dict, list[dict]]],
+    stale_cutoff: datetime,
+    *,
+    teams: bool = False,
+) -> list[str]:
+    review_load: dict[str, dict[str, Any]] = {}
+    for pr_data, reviews in queue:
+        if _review_bucket(pr_data, reviews, stale_cutoff) != "review_requested":
+            continue
+        updated_at = _parse_iso_dt(pr_data.get("updated_at")) or datetime.now(timezone.utc)
+        number = pr_data.get("number")
+        title = _trunc(pr_data.get("title", ""), 40)
+        for reviewer in _requested_reviewer_names(pr_data):
+            is_team = reviewer.startswith("team:")
+            if is_team != teams:
+                continue
+            display_name = reviewer.removeprefix("team:") if is_team else reviewer
+            info = review_load.setdefault(
+                display_name,
+                {"count": 0, "oldest": updated_at, "number": number, "title": title},
+            )
+            info["count"] += 1
+            if updated_at <= info["oldest"]:
+                info["oldest"] = updated_at
+                info["number"] = number
+                info["title"] = title
+
+    lines = []
+    for reviewer, info in sorted(review_load.items(), key=lambda item: (-item[1]["count"], item[1]["oldest"]))[:5]:
+        lines.append(
+            f"`{reviewer}`  •  {info['count']} pending  •  oldest #{info['number']} {_ts(info['oldest'].isoformat())}"
+        )
+    return lines
+
+
+def _reviewer_load_lines(
+    queue: list[tuple[dict, list[dict]]],
+    stale_cutoff: datetime,
+) -> list[str]:
+    return _review_load_lines(queue, stale_cutoff, teams=False)
+
+
+def _team_load_lines(
+    queue: list[tuple[dict, list[dict]]],
+    stale_cutoff: datetime,
+) -> list[str]:
+    return _review_load_lines(queue, stale_cutoff, teams=True)
+
+
+def _build_review_queue_embed(
+    repo: str,
+    buckets: dict[str, list[tuple[dict, list[dict]]]],
+    stale_hours: int,
+    reviewer_load_lines: list[str] | None = None,
+    team_load_lines: list[str] | None = None,
+) -> discord.Embed:
+    em = discord.Embed(
+        title=f"🔎 PR Review Queue — {repo}",
+        url=f"https://github.com/{repo}/pulls",
+        description=f"Open PRs grouped by review status. Stale threshold: {stale_hours} hour(s).",
+        color=0x2DA44E,
+    )
+    sections = [
+        ("review_requested", "Needs Review"),
+        ("changes_requested", "Changes Requested"),
+        ("approved", "Approved"),
+        ("stale", "Stale"),
+        ("waiting", "Waiting"),
+    ]
+    for key, label in sections:
+        items = buckets.get(key) or []
+        if not items:
+            continue
+        value = "\n\n".join(_review_value(pr_data, reviews) for pr_data, reviews in items[:MAX_TRIAGE_ITEMS])
+        em.add_field(name=f"{label} ({len(items)})", value=value, inline=False)
+    if reviewer_load_lines:
+        em.add_field(name="Reviewer Load", value="\n".join(reviewer_load_lines), inline=False)
+    if team_load_lines:
+        em.add_field(name="Team Load", value="\n".join(team_load_lines), inline=False)
+    draft_count = len(buckets.get("draft") or [])
+    if draft_count:
+        em.set_footer(text=f"{draft_count} draft PR(s) hidden from the active queue")
+    return em
+
+
+def _issue_body(summary: str, reproduction: str | None = None, source_message: discord.Message | None = None) -> str:
+    parts = ["## Summary", summary.strip() or "No summary provided."]
+    if reproduction and reproduction.strip():
+        parts.extend(["", "## Reproduction / Notes", reproduction.strip()])
+    if source_message is not None:
+        guild_id = source_message.guild.id if source_message.guild else "@me"
+        source_link = f"https://discord.com/channels/{guild_id}/{source_message.channel.id}/{source_message.id}"
+        excerpt = _trunc(source_message.content or "(no message content)", 500)
+        parts.extend(
+            [
+                "",
+                "## Discord Context",
+                f"- Source message: {source_link}",
+                f"- Author: @{getattr(source_message.author, 'display_name', getattr(source_message.author, 'name', 'unknown'))}",
+                "",
+                "> " + excerpt.replace("\n", "\n> "),
+            ]
+        )
+    return "\n".join(parts).strip()
+
+
+def _build_issue_triage_embed(repo: str, issues: list[dict], stale_days: int) -> discord.Embed:
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=stale_days)
+    unassigned = [issue for issue in issues if not issue.get("assignees")]
+    unlabeled = [issue for issue in issues if not issue.get("labels")]
+    stale = [
+        issue
+        for issue in issues
+        if (_parse_iso_dt(issue.get("updated_at")) or datetime.now(timezone.utc)) <= stale_cutoff
+    ]
+
+    em = discord.Embed(
+        title=f"🧰 Issue Triage — {repo}",
+        url=f"https://github.com/{repo}/issues",
+        description=(
+            f"Open issues: `{len(issues)}`  •  Unassigned: `{len(unassigned)}`  •  "
+            f"Unlabeled: `{len(unlabeled)}`  •  Stale: `{len(stale)}`"
+        ),
+        color=0xFBCA04,
+    )
+
+    sections = [
+        ("Unassigned", unassigned),
+        ("Unlabeled", unlabeled),
+        (f"Stale ({stale_days}d)", stale),
+    ]
+    for label, section_issues in sections:
+        if not section_issues:
+            continue
+        lines = []
+        for issue in section_issues[:MAX_TRIAGE_ITEMS]:
+            author = (issue.get("user") or {}).get("login", "?")
+            lines.append(
+                f"[#{issue.get('number')} {_trunc(issue.get('title', ''), 55)}]({issue.get('html_url', '')})"
+                f"  •  by `{author}`  •  updated {_ts(issue.get('updated_at'))}"
+            )
+        em.add_field(name=label, value="\n".join(lines), inline=False)
+    return em
+
+
+def _should_send_review_digest(now: datetime, hour_utc: int, last_sent_on: str | None) -> bool:
+    if now.hour < hour_utc:
+        return False
+    return last_sent_on != now.date().isoformat()
+
+
+def _default_issue_template(template_key: str) -> str:
+    templates = {
+        "bug": "Problem summary\n\nExpected behavior\n\nActual behavior\n\nImpact",
+        "feature": "Requested change\n\nWhy it matters\n\nAcceptance criteria",
+        "docs": "What is unclear\n\nSuggested documentation update\n\nWho is affected",
+    }
+    return templates.get(template_key, "")
 
 
 def _make_repo_embed(data: dict) -> discord.Embed:
@@ -168,14 +408,23 @@ class GitHubClient:
             self._session = aiohttp.ClientSession(connector=connector)
         return self._session
 
-    async def get(self, path: str, *, extra_headers: dict | None = None) -> tuple[int, dict | list | None, dict]:
-        """GET *path* (relative to GITHUB_API). Returns (status, body, response_headers)."""
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        extra_headers: dict | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict | list | str | None, dict]:
+        """Perform an HTTP request relative to the GitHub API."""
         url = path if path.startswith("http") else f"{GITHUB_API}{path}"
         session = await self._session_get()
         try:
-            async with session.get(
+            async with session.request(
+                method,
                 url,
                 headers=self._headers(extra_headers),
+                json=json_body,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 resp_headers = dict(resp.headers)
@@ -184,11 +433,24 @@ class GitHubClient:
                 try:
                     body = await resp.json(content_type=None)
                 except Exception:
-                    body = None
+                    body = await resp.text()
                 return resp.status, body, resp_headers
         except Exception as exc:
             logger.warning("GitHub API error for %s: %s", url, exc)
             return 0, None, {}
+
+    async def get(self, path: str, *, extra_headers: dict | None = None) -> tuple[int, dict | list | str | None, dict]:
+        """GET *path* (relative to GITHUB_API). Returns (status, body, response_headers)."""
+        return await self.request("GET", path, extra_headers=extra_headers)
+
+    async def post(self, path: str, *, json_body: dict[str, Any]) -> tuple[int, dict | list | str | None, dict]:
+        return await self.request("POST", path, json_body=json_body)
+
+    async def patch(self, path: str, *, json_body: dict[str, Any]) -> tuple[int, dict | list | str | None, dict]:
+        return await self.request("PATCH", path, json_body=json_body)
+
+    async def delete(self, path: str, *, json_body: dict[str, Any] | None = None) -> tuple[int, dict | list | str | None, dict]:
+        return await self.request("DELETE", path, json_body=json_body)
 
     async def close(self) -> None:
         if self._session and not self._session.closed:
@@ -304,6 +566,82 @@ def _release_embed(repo: str, payload: dict) -> discord.Embed | None:
     return em
 
 
+class GitHubIssueModal(discord.ui.Modal):
+    def __init__(
+        self,
+        cog: GitHubCog,
+        *,
+        repo: str | None = None,
+        title_default: str = "",
+        summary_default: str = "",
+        reproduction_default: str = "",
+        labels_default: str = "",
+        template_key: str | None = None,
+        source_message: discord.Message | None = None,
+    ) -> None:
+        super().__init__(title="Create GitHub Issue")
+        self.cog = cog
+        self.repo = repo
+        self.template_key = template_key
+        self.source_message = source_message
+
+        self.repo_input: discord.ui.TextInput | None = None
+        if repo is None:
+            self.repo_input = discord.ui.TextInput(
+                label="Repository",
+                placeholder="owner/repo",
+                max_length=120,
+            )
+            self.add_item(self.repo_input)
+
+        self.title_input = discord.ui.TextInput(
+            label="Issue Title",
+            placeholder="Short summary of the problem or task",
+            default=title_default[:100] if title_default else None,
+            max_length=120,
+        )
+        self.summary_input = discord.ui.TextInput(
+            label="Summary",
+            style=discord.TextStyle.paragraph,
+            placeholder="What needs to be fixed or tracked?",
+            default=summary_default[:4000] if summary_default else None,
+            max_length=4000,
+        )
+        self.repro_input = discord.ui.TextInput(
+            label="Reproduction / Notes",
+            style=discord.TextStyle.paragraph,
+            placeholder="Steps, context, links, or debugging notes",
+            required=False,
+            default=reproduction_default[:4000] if reproduction_default else None,
+            max_length=4000,
+        )
+        self.labels_input = discord.ui.TextInput(
+            label="Labels",
+            placeholder="bug, docs, backend",
+            required=False,
+            default=labels_default[:200] if labels_default else None,
+            max_length=200,
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.summary_input)
+        self.add_item(self.repro_input)
+        self.add_item(self.labels_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        repo = self.repo or (self.repo_input.value.strip() if self.repo_input else "")
+        await self.cog._submit_issue(
+            interaction,
+            repo=repo,
+            title=self.title_input.value,
+            summary=self.summary_input.value,
+            reproduction=self.repro_input.value,
+            labels_raw=self.labels_input.value,
+            template_key=self.template_key,
+            source_message=self.source_message,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
@@ -316,6 +654,8 @@ class GitHubCog(commands.Cog, name="GitHub"):
         self.db = db
         self.gh = GitHubClient(token=config.github_token)
         self._poll_task_started = False
+        self._issue_ctx = app_commands.ContextMenu(name="Create GitHub Issue", callback=self._issue_context_menu)
+        self.bot.tree.add_command(self._issue_ctx)
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -326,7 +666,248 @@ class GitHubCog(commands.Cog, name="GitHub"):
 
     async def cog_unload(self) -> None:
         self._poller.cancel()
+        self.bot.tree.remove_command(self._issue_ctx.name, type=self._issue_ctx.type)
         await self.gh.close()
+
+    async def _issue_context_menu(self, interaction: discord.Interaction, message: discord.Message) -> None:
+        title = (message.content or "New issue from Discord").splitlines()[0][:100]
+        default_repo = await self._get_default_repo(interaction.guild_id)  # type: ignore[arg-type]
+        default_template = await self._get_default_issue_template_key(interaction.guild_id)  # type: ignore[arg-type]
+        summary_default, reproduction_default = await self._get_issue_template_defaults(
+            interaction.guild_id,  # type: ignore[arg-type]
+            default_template,
+            summary_default=message.content[:4000],
+            reproduction_default="",
+        )
+        labels_default = await self._get_issue_template_labels_text(interaction.guild_id, default_template)  # type: ignore[arg-type]
+        await interaction.response.send_modal(
+            GitHubIssueModal(
+                self,
+                repo=default_repo,
+                title_default=title,
+                summary_default=summary_default,
+                reproduction_default=reproduction_default,
+                labels_default=labels_default,
+                template_key=default_template,
+                source_message=message,
+            )
+        )
+
+    async def _require_github_write_token(self, interaction: discord.Interaction) -> bool:
+        if self.gh._token:
+            return True
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "❌ A `GITHUB_TOKEN` with repo issue permissions is required for this command.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ A `GITHUB_TOKEN` with repo issue permissions is required for this command.",
+                ephemeral=True,
+            )
+        return False
+
+    async def _fetch_pr_reviews(self, repo: str, number: int) -> list[dict]:
+        status, data, _ = await self.gh.get(f"/repos/{repo}/pulls/{number}/reviews?per_page=30")
+        if status != 200 or not isinstance(data, list):
+            return []
+        return data
+
+    async def _fetch_review_queue(self, repo: str) -> list[tuple[dict, list[dict]]]:
+        status, data, _ = await self.gh.get(
+            f"/repos/{repo}/pulls?state=open&sort=updated&direction=desc&per_page={MAX_REVIEW_QUEUE_PRS}"
+        )
+        if status != 200 or not isinstance(data, list):
+            return []
+        queue: list[tuple[dict, list[dict]]] = []
+        for pr_data in data[:MAX_REVIEW_QUEUE_PRS]:
+            reviews = await self._fetch_pr_reviews(repo, pr_data.get("number"))
+            queue.append((pr_data, reviews))
+        return queue
+
+    async def _submit_issue(
+        self,
+        interaction: discord.Interaction,
+        *,
+        repo: str,
+        title: str,
+        summary: str,
+        reproduction: str | None,
+        labels_raw: str | None,
+        template_key: str | None = None,
+        source_message: discord.Message | None = None,
+    ) -> None:
+        if not _REPO_RE.match(repo):
+            await interaction.response.send_message("❌ Invalid repo format. Use `owner/repo`.", ephemeral=True)
+            return
+        if not await self._require_github_write_token(interaction):
+            return
+
+        labels = sorted({label.strip() for label in (labels_raw or "").split(",") if label.strip()})
+        assignees = await self._get_issue_template_assignees(interaction.guild_id, template_key)
+        milestone = await self._get_issue_template_milestone(interaction.guild_id, template_key)
+        payload = {
+            "title": title.strip(),
+            "body": _issue_body(summary, reproduction, source_message),
+        }
+        if labels:
+            payload["labels"] = labels
+        if assignees:
+            payload["assignees"] = assignees
+        if milestone is not None:
+            payload["milestone"] = milestone
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        status, data, _ = await self.gh.post(f"/repos/{repo}/issues", json_body=payload)
+        if status not in (200, 201) or not isinstance(data, dict):
+            await interaction.followup.send("❌ Failed to create the GitHub issue.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Created issue [#{data.get('number')} {data.get('title', 'issue')}]({data.get('html_url', '')}) in `{repo}`.",
+            ephemeral=True,
+        )
+
+    async def _get_linked_github_username(self, guild_id: int, user_id: int) -> str | None:
+        return await self.db.get_guild_config(guild_id, f"github_username_{user_id}")
+
+    async def _get_default_repo(self, guild_id: int | None) -> str | None:
+        if guild_id is None:
+            return None
+        repo = await self.db.get_guild_config(guild_id, "github_default_repo")
+        return repo or None
+
+    async def _get_default_issue_template_key(self, guild_id: int | None) -> str | None:
+        if guild_id is None:
+            return None
+        template_key = await self.db.get_guild_config(guild_id, "github_issue_default_template")
+        if template_key in ISSUE_TEMPLATE_KEYS:
+            return template_key
+        return None
+
+    async def _get_issue_template_text(self, guild_id: int | None, template_key: str | None) -> str:
+        if guild_id is None or template_key not in ISSUE_TEMPLATE_KEYS:
+            return ""
+        stored = await self.db.get_guild_config(guild_id, f"github_issue_template_{template_key}")
+        return stored or _default_issue_template(template_key)
+
+    async def _get_issue_template_defaults(
+        self,
+        guild_id: int | None,
+        template_key: str | None,
+        *,
+        summary_default: str = "",
+        reproduction_default: str = "",
+    ) -> tuple[str, str]:
+        template_text = await self._get_issue_template_text(guild_id, template_key)
+        if not template_text:
+            return summary_default, reproduction_default
+
+        if summary_default.strip():
+            return summary_default, template_text
+        return template_text, reproduction_default
+
+    async def _get_issue_template_labels_text(self, guild_id: int | None, template_key: str | None) -> str:
+        if guild_id is None or template_key not in ISSUE_TEMPLATE_KEYS:
+            return ""
+        stored = await self.db.get_guild_config(guild_id, f"github_issue_template_labels_{template_key}")
+        return stored or ""
+
+    async def _get_issue_template_assignees(self, guild_id: int | None, template_key: str | None) -> list[str]:
+        if guild_id is None or template_key not in ISSUE_TEMPLATE_KEYS:
+            return []
+        stored = await self.db.get_guild_config(guild_id, f"github_issue_template_assignees_{template_key}")
+        if not stored:
+            return []
+        return sorted({assignee.strip() for assignee in stored.split(",") if assignee.strip()})
+
+    async def _get_issue_template_milestone(self, guild_id: int | None, template_key: str | None) -> int | None:
+        if guild_id is None or template_key not in ISSUE_TEMPLATE_KEYS:
+            return None
+        stored = await self.db.get_guild_config(guild_id, f"github_issue_template_milestone_{template_key}")
+        if not stored or not stored.strip().isdigit():
+            return None
+        return int(stored.strip())
+
+    async def _resolve_repo(self, interaction: discord.Interaction, repo: str | None) -> str | None:
+        resolved = (repo or "").strip()
+        if not resolved:
+            resolved = (await self._get_default_repo(interaction.guild_id)) or ""
+        if not resolved:
+            await interaction.response.send_message(
+                "❌ No repo provided and no default repo is configured. Use `/github default_repo <owner/repo>` first.",
+                ephemeral=True,
+            )
+            return None
+        if not _REPO_RE.match(resolved):
+            await interaction.response.send_message("❌ Invalid repo format. Use `owner/repo`.", ephemeral=True)
+            return None
+        return resolved
+
+    async def _fetch_issue(self, repo: str, number: int) -> dict | None:
+        status, data, _ = await self.gh.get(f"/repos/{repo}/issues/{number}")
+        if status != 200 or not isinstance(data, dict):
+            return None
+        return data
+
+    async def _send_review_digest(self, guild: discord.Guild, channel: discord.TextChannel, repo: str, stale_hours: int) -> bool:
+        queue = await self._fetch_review_queue(repo)
+        if not queue:
+            return False
+
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=stale_hours)
+        buckets: dict[str, list[tuple[dict, list[dict]]]] = {}
+        for pr_data, reviews in queue:
+            bucket = _review_bucket(pr_data, reviews, stale_cutoff)
+            buckets.setdefault(bucket, []).append((pr_data, reviews))
+
+        reviewer_lines = _reviewer_load_lines(queue, stale_cutoff)
+        team_lines = _team_load_lines(queue, stale_cutoff)
+        embed = _build_review_queue_embed(repo, buckets, stale_hours, reviewer_lines, team_lines)
+        embed.title = f"🗓️ Daily Review Digest — {repo}"
+        embed.description = (
+            f"Daily PR review summary for **{guild.name}**. "
+            f"Stale threshold: {stale_hours} hour(s)."
+        )
+        await channel.send(embed=embed)
+        return True
+
+    async def _maybe_send_review_digests(self) -> None:
+        now = datetime.now(timezone.utc)
+        for guild in self.bot.guilds:
+            channel_raw = await self.db.get_guild_config(guild.id, "github_review_digest_channel")
+            if not channel_raw:
+                continue
+            repo = (
+                await self.db.get_guild_config(guild.id, "github_review_digest_repo")
+                or await self._get_default_repo(guild.id)
+            )
+            if not repo or not _REPO_RE.match(repo):
+                continue
+
+            hour_raw = await self.db.get_guild_config(guild.id, "github_review_digest_hour_utc")
+            stale_raw = await self.db.get_guild_config(guild.id, "github_review_digest_stale_hours")
+            last_sent_on = await self.db.get_guild_config(guild.id, "github_review_digest_last_sent")
+            hour_utc = int(hour_raw) if hour_raw and hour_raw.isdigit() else DEFAULT_REVIEW_DIGEST_HOUR_UTC
+            stale_hours = int(stale_raw) if stale_raw and stale_raw.isdigit() else 24
+            if not _should_send_review_digest(now, hour_utc, last_sent_on):
+                continue
+
+            channel = guild.get_channel(int(channel_raw))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+
+            try:
+                sent = await self._send_review_digest(guild, channel, repo, stale_hours)
+            except discord.Forbidden:
+                logger.warning("GitHub: no permission to send review digest in channel %s", channel_raw)
+                continue
+            except Exception as exc:
+                logger.warning("GitHub review digest error for guild %s: %s", guild.id, exc)
+                continue
+
+            if sent:
+                await self.db.set_guild_config(guild.id, "github_review_digest_last_sent", now.date().isoformat())
 
     # ------------------------------------------------------------------ poller
 
@@ -334,6 +915,7 @@ class GitHubCog(commands.Cog, name="GitHub"):
     async def _poller(self) -> None:
         try:
             await self._poll_all()
+            await self._maybe_send_review_digests()
         except Exception as exc:
             logger.exception("GitHub poller error: %s", exc)
 
@@ -632,7 +1214,7 @@ class GitHubCog(commands.Cog, name="GitHub"):
     ])
     async def gh_search(self, interaction: discord.Interaction, query: str, sort: str = "") -> None:
         await interaction.response.defer()
-        path = f"/search/repositories?q={query}&per_page={MAX_SEARCH_RESULTS}"
+        path = f"/search/repositories?q={quote_plus(query)}&per_page={MAX_SEARCH_RESULTS}"
         if sort:
             path += f"&sort={sort}&order=desc"
         status, data, _ = await self.gh.get(path)
@@ -685,6 +1267,377 @@ class GitHubCog(commands.Cog, name="GitHub"):
         token_status = "✅ Authenticated" if self.gh._token else "⚠️ Unauthenticated (60 req/hr)"
         em.set_footer(text=token_status)
         await interaction.followup.send(embed=em, ephemeral=True)
+
+    @github_group.command(name="link", description="Link your Discord user to a GitHub username for review commands.")
+    @app_commands.describe(username="Your GitHub username")
+    async def gh_link(self, interaction: discord.Interaction, username: str) -> None:
+        await self.db.set_guild_config(interaction.guild_id, f"github_username_{interaction.user.id}", username)  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Linked your account to GitHub user `{username}`.",
+            ephemeral=True,
+        )
+
+    @github_group.command(name="default_repo", description="Show or set the default GitHub repo for this server.")
+    @app_commands.describe(repo="owner/repo to store as the default repo (leave blank to view current)")
+    @app_commands.default_permissions(manage_guild=True)
+    async def gh_default_repo(self, interaction: discord.Interaction, repo: str | None = None) -> None:
+        if repo is None:
+            current = await self._get_default_repo(interaction.guild_id)  # type: ignore[arg-type]
+            if current:
+                await interaction.response.send_message(f"ℹ️ Default GitHub repo: `{current}`.", ephemeral=True)
+            else:
+                await interaction.response.send_message("ℹ️ No default GitHub repo is configured.", ephemeral=True)
+            return
+        if not _REPO_RE.match(repo):
+            await interaction.response.send_message("❌ Invalid repo format. Use `owner/repo`.", ephemeral=True)
+            return
+        await self.db.set_guild_config(interaction.guild_id, "github_default_repo", repo)  # type: ignore[arg-type]
+        await interaction.response.send_message(f"✅ Default GitHub repo set to `{repo}`.", ephemeral=True)
+
+    @github_group.command(name="clear_default_repo", description="Clear the default GitHub repo for this server.")
+    @app_commands.default_permissions(manage_guild=True)
+    async def gh_clear_default_repo(self, interaction: discord.Interaction) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "github_default_repo", "")  # type: ignore[arg-type]
+        await interaction.response.send_message("✅ Cleared the default GitHub repo.", ephemeral=True)
+
+    @github_group.command(name="review_queue", description="Show open PRs grouped by review status.")
+    @app_commands.describe(repo="owner/repo (optional if a default repo is configured)", stale_hours="How old a PR must be before it is considered stale")
+    async def gh_review_queue(
+        self,
+        interaction: discord.Interaction,
+        repo: str | None = None,
+        stale_hours: app_commands.Range[int, 1, 336] = 24,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+
+        await interaction.response.defer()
+        queue = await self._fetch_review_queue(repo)
+        if not queue:
+            await interaction.followup.send(f"✅ No open pull requests found in `{repo}`.")
+            return
+
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=stale_hours)
+        buckets: dict[str, list[tuple[dict, list[dict]]]] = {}
+        for pr_data, reviews in queue:
+            bucket = _review_bucket(pr_data, reviews, stale_cutoff)
+            buckets.setdefault(bucket, []).append((pr_data, reviews))
+
+        reviewer_lines = _reviewer_load_lines(queue, stale_cutoff)
+        team_lines = _team_load_lines(queue, stale_cutoff)
+        await interaction.followup.send(embed=_build_review_queue_embed(repo, buckets, stale_hours, reviewer_lines, team_lines))
+
+    @github_group.command(name="my_reviews", description="Show PRs in a repo that are requesting your review.")
+    @app_commands.describe(repo="owner/repo (optional if a default repo is configured)", username="GitHub username (optional if linked with /github link)")
+    async def gh_my_reviews(
+        self,
+        interaction: discord.Interaction,
+        repo: str | None = None,
+        username: str | None = None,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+
+        github_username = username
+        if not github_username:
+            github_username = await self._get_linked_github_username(interaction.guild_id, interaction.user.id)  # type: ignore[arg-type]
+        if not github_username:
+            await interaction.response.send_message(
+                "❌ No linked GitHub username found. Use `/github link <username>` or provide `username`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        queue = await self._fetch_review_queue(repo)
+        mine = []
+        for pr_data, reviews in queue:
+            requested = {name.lower() for name in _requested_reviewer_names(pr_data)}
+            if github_username.lower() in requested:
+                mine.append((pr_data, reviews))
+
+        if not mine:
+            await interaction.followup.send(
+                f"✅ No open PRs in `{repo}` are currently requesting review from `{github_username}`.",
+                ephemeral=True,
+            )
+            return
+
+        em = discord.Embed(
+            title=f"👀 Requested Reviews — {repo}",
+            description=f"Open PRs requesting review from `{github_username}`.",
+            url=f"https://github.com/{repo}/pulls",
+            color=0x0969DA,
+        )
+        for pr_data, reviews in mine[:MAX_REVIEW_QUEUE_PRS]:
+            em.add_field(
+                name=f"#{pr_data.get('number')} — {_trunc(pr_data.get('title', ''), 60)}",
+                value=_review_value(pr_data, reviews),
+                inline=False,
+            )
+        await interaction.followup.send(embed=em, ephemeral=True)
+
+    @github_group.command(name="issue_create", description="Open a modal to create a GitHub issue.")
+    @app_commands.describe(
+        repo="owner/repo (optional if a default repo is configured)",
+        template="Optional issue template",
+    )
+    @app_commands.choices(template=[
+        app_commands.Choice(name="Bug", value="bug"),
+        app_commands.Choice(name="Feature", value="feature"),
+        app_commands.Choice(name="Docs", value="docs"),
+    ])
+    @app_commands.default_permissions(manage_messages=True)
+    async def gh_issue_create(
+        self,
+        interaction: discord.Interaction,
+        repo: str | None = None,
+        template: str | None = None,
+    ) -> None:
+        if not await self._require_github_write_token(interaction):
+            return
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+        summary_default, reproduction_default = await self._get_issue_template_defaults(
+            interaction.guild_id,
+            template or await self._get_default_issue_template_key(interaction.guild_id),
+        )
+        labels_default = await self._get_issue_template_labels_text(
+            interaction.guild_id,
+            template or await self._get_default_issue_template_key(interaction.guild_id),
+        )
+        await interaction.response.send_modal(
+            GitHubIssueModal(
+                self,
+                repo=repo,
+                summary_default=summary_default,
+                reproduction_default=reproduction_default,
+                labels_default=labels_default,
+                template_key=template or await self._get_default_issue_template_key(interaction.guild_id),
+            )
+        )
+
+    @github_group.command(name="triage", description="Show open issues that need triage attention.")
+    @app_commands.describe(repo="owner/repo (optional if a default repo is configured)", stale_days="How old an issue must be before it is considered stale")
+    async def gh_triage(
+        self,
+        interaction: discord.Interaction,
+        repo: str | None = None,
+        stale_days: app_commands.Range[int, 1, 90] = 7,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+
+        await interaction.response.defer()
+        status, data, _ = await self.gh.get(
+            f"/repos/{repo}/issues?state=open&sort=updated&direction=asc&per_page=30"
+        )
+        if status != 200 or not isinstance(data, list):
+            await interaction.followup.send("❌ GitHub API error.")
+            return
+
+        issues = [issue for issue in data if "pull_request" not in issue]
+        if not issues:
+            await interaction.followup.send(f"✅ No open issues in `{repo}`.")
+            return
+
+        await interaction.followup.send(embed=_build_issue_triage_embed(repo, issues, stale_days))
+
+    @github_group.command(name="review_digest", description="Configure the daily PR review digest channel and time.")
+    @app_commands.describe(
+        channel="Channel to post the digest in",
+        hour_utc="Hour in UTC when the digest should post",
+        repo="Repo to digest (defaults to the configured default repo)",
+        stale_hours="PR age in hours to treat as stale in the digest",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    async def gh_review_digest(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        hour_utc: app_commands.Range[int, 0, 23] = DEFAULT_REVIEW_DIGEST_HOUR_UTC,
+        repo: str | None = None,
+        stale_hours: app_commands.Range[int, 1, 336] = 24,
+    ) -> None:
+        repo = repo or await self._get_default_repo(interaction.guild_id)  # type: ignore[arg-type]
+        if not repo:
+            await interaction.response.send_message(
+                "❌ Provide a repo or configure `/github default_repo <owner/repo>` first.",
+                ephemeral=True,
+            )
+            return
+        if not _REPO_RE.match(repo):
+            await interaction.response.send_message("❌ Invalid repo format. Use `owner/repo`.", ephemeral=True)
+            return
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_channel", str(channel.id))  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_hour_utc", str(hour_utc))  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_repo", repo)  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_stale_hours", str(stale_hours))  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_last_sent", "")  # type: ignore[arg-type]
+        await interaction.response.send_message(
+            f"✅ Daily review digest configured for `{repo}` in {channel.mention} at `{hour_utc}:00 UTC`.",
+            ephemeral=True,
+        )
+
+    @github_group.command(name="review_digest_disable", description="Disable the daily PR review digest.")
+    @app_commands.default_permissions(manage_guild=True)
+    async def gh_review_digest_disable(self, interaction: discord.Interaction) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_channel", "")  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_repo", "")  # type: ignore[arg-type]
+        await self.db.set_guild_config(interaction.guild_id, "github_review_digest_last_sent", "")  # type: ignore[arg-type]
+        await interaction.response.send_message("✅ Disabled the daily review digest.", ephemeral=True)
+
+    @github_group.command(name="issue_comment", description="Add a comment to an issue or pull request.")
+    @app_commands.describe(repo="owner/repo (optional if a default repo is configured)", number="Issue or PR number", comment="Comment body")
+    @app_commands.default_permissions(manage_messages=True)
+    async def gh_issue_comment(
+        self,
+        interaction: discord.Interaction,
+        number: int,
+        comment: str,
+        repo: str | None = None,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+        if not await self._require_github_write_token(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        status, data, _ = await self.gh.post(
+            f"/repos/{repo}/issues/{number}/comments",
+            json_body={"body": comment.strip()},
+        )
+        if status not in (200, 201) or not isinstance(data, dict):
+            await interaction.followup.send("❌ Failed to add the issue comment.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Added a comment to [#{number}]({data.get('html_url', '')}) in `{repo}`.",
+            ephemeral=True,
+        )
+
+    @github_group.command(name="issue_state", description="Open or close an issue.")
+    @app_commands.describe(repo="owner/repo (optional if a default repo is configured)", number="Issue number", state="New state")
+    @app_commands.choices(state=[
+        app_commands.Choice(name="Open", value="open"),
+        app_commands.Choice(name="Closed", value="closed"),
+    ])
+    @app_commands.default_permissions(manage_messages=True)
+    async def gh_issue_state(
+        self,
+        interaction: discord.Interaction,
+        number: int,
+        state: str,
+        repo: str | None = None,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+        if not await self._require_github_write_token(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        status, data, _ = await self.gh.patch(
+            f"/repos/{repo}/issues/{number}",
+            json_body={"state": state},
+        )
+        if status != 200 or not isinstance(data, dict):
+            await interaction.followup.send("❌ Failed to update the issue state.", ephemeral=True)
+            return
+        await interaction.followup.send(
+            f"✅ Updated [#{number} {data.get('title', 'issue')}]({data.get('html_url', '')}) to `{state}`.",
+            ephemeral=True,
+        )
+
+    @github_group.command(name="issue_labels", description="Add or remove labels on an issue.")
+    @app_commands.describe(
+        repo="owner/repo (optional if a default repo is configured)",
+        number="Issue number",
+        add="Comma-separated labels to add",
+        remove="Comma-separated labels to remove",
+    )
+    @app_commands.default_permissions(manage_messages=True)
+    async def gh_issue_labels(
+        self,
+        interaction: discord.Interaction,
+        number: int,
+        add: str | None = None,
+        remove: str | None = None,
+        repo: str | None = None,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+        if not await self._require_github_write_token(interaction):
+            return
+        add_labels = {label.strip() for label in (add or "").split(",") if label.strip()}
+        remove_labels = {label.strip() for label in (remove or "").split(",") if label.strip()}
+        if not add_labels and not remove_labels:
+            await interaction.response.send_message("❌ Provide at least one label to add or remove.", ephemeral=True)
+            return
+
+        issue = await self._fetch_issue(repo, number)
+        if issue is None:
+            await interaction.response.send_message(f"❌ Issue #{number} not found in `{repo}`.", ephemeral=True)
+            return
+        current_labels = {label.get("name", "") for label in issue.get("labels") or [] if label.get("name")}
+        next_labels = sorted((current_labels | add_labels) - remove_labels)
+
+        await interaction.response.defer(ephemeral=True)
+        status, data, _ = await self.gh.patch(
+            f"/repos/{repo}/issues/{number}",
+            json_body={"labels": next_labels},
+        )
+        if status != 200 or not isinstance(data, dict):
+            await interaction.followup.send("❌ Failed to update issue labels.", ephemeral=True)
+            return
+        label_text = ", ".join(f"`{label}`" for label in next_labels) if next_labels else "no labels"
+        await interaction.followup.send(
+            f"✅ Updated labels for [#{number} {data.get('title', 'issue')}]({data.get('html_url', '')}): {label_text}.",
+            ephemeral=True,
+        )
+
+    @github_group.command(name="issue_assign", description="Assign or unassign a GitHub user on an issue.")
+    @app_commands.describe(
+        repo="owner/repo (optional if a default repo is configured)",
+        number="Issue number",
+        username="GitHub username to assign or unassign",
+        remove="Remove the assignee instead of adding them",
+    )
+    @app_commands.default_permissions(manage_messages=True)
+    async def gh_issue_assign(
+        self,
+        interaction: discord.Interaction,
+        number: int,
+        username: str,
+        remove: bool = False,
+        repo: str | None = None,
+    ) -> None:
+        repo = await self._resolve_repo(interaction, repo)
+        if not repo:
+            return
+        if not await self._require_github_write_token(interaction):
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        path = f"/repos/{repo}/issues/{number}/assignees"
+        payload = {"assignees": [username]}
+        if remove:
+            status, data, _ = await self.gh.delete(path, json_body=payload)
+        else:
+            status, data, _ = await self.gh.post(path, json_body=payload)
+        if status != 200 or not isinstance(data, dict):
+            await interaction.followup.send("❌ Failed to update issue assignees.", ephemeral=True)
+            return
+        verb = "Removed" if remove else "Added"
+        await interaction.followup.send(
+            f"✅ {verb} `{username}` {'from' if remove else 'to'} [#{number} {data.get('title', 'issue')}]({data.get('html_url', '')}).",
+            ephemeral=True,
+        )
 
     # ------------------------------------------------------------------ subscription commands
 

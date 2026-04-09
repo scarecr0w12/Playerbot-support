@@ -195,6 +195,18 @@ Inspired by [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot), Ti
 - **/github issue** `<owner/repo> <number>` — look up any issue or PR by number.
 - **/github issues** `<owner/repo>` — list open issues (optional label filter).
 - **/github prs** `<owner/repo>` — list open pull requests.
+- **/github review_queue** `<owner/repo> [stale_hours]` — group open PRs into needs-review, changes-requested, approved, stale, and waiting buckets.
+- **/github link** `<username>` / **/github my_reviews** `<owner/repo> [username]` — link your GitHub username and view PRs currently requesting your review.
+- Review queue embeds and daily digests include a **reviewer load summary** showing who has the most pending review requests and the oldest outstanding assignment.
+- **/github default_repo** `[owner/repo]` — show or set a per-server default repo used by review and issue workflow commands.
+- **/github review_digest** `<channel> [hour_utc] [repo] [stale_hours]` — post a daily PR review digest to a channel; **/github review_digest_disable** turns it off.
+- **/github issue_create** `<owner/repo>` — open a modal to create a GitHub issue from Discord.
+- **Right-click message → Create GitHub Issue** — turn a Discord message into a pre-filled GitHub issue draft.
+- **Issue templates** — optional `bug`, `feature`, and `docs` templates can prefill issue creation, including dashboard-configurable default labels, default assignees, and default milestone numbers per template. Milestone defaults are validated against the configured default repo when saved from the dashboard.
+- **/github triage** `<owner/repo> [stale_days]` — surface open issues that are unassigned, unlabeled, or stale.
+- **/github issue_comment / issue_state / issue_labels / issue_assign** — comment on issues, open/close them, update labels, and manage assignees from Discord.
+
+The dashboard **Integrations** page can now manage GitHub workflow settings such as the default repo, daily review digest channel/time, Discord user ID ↔ GitHub username links, issue template text/labels/assignees/milestones, and live review queue, digest, or issue triage previews without needing slash commands. Review previews also surface individual reviewer load and requested-team load so maintainers can spot bottlenecks faster.
 - **/github releases** `<owner/repo>` — latest releases with assets and pre-release flags.
 - **/github search** `<query>` — search GitHub repositories (sort by stars/forks/updated).
 - **/github ratelimit** — view current API rate-limit status.
