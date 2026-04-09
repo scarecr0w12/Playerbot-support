@@ -2,268 +2,612 @@
 {% block title %}Integrations — Bot Dashboard{% endblock %}
 {% block header %}Integrations{% endblock %}
 
+{% block head_extra %}
+<style>
+  .integrations-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+  .integrations-sticky {
+    position: sticky;
+    top: 5.5rem;
+  }
+  .guild-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.95rem;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(9, 16, 29, 0.72);
+    color: #dbe7ff;
+    text-decoration: none;
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .guild-tile:hover {
+    transform: translateY(-1px);
+    border-color: rgba(95, 128, 255, 0.32);
+    background: rgba(13, 22, 38, 0.9);
+  }
+  .guild-tile.active {
+    border-color: rgba(95, 128, 255, 0.36);
+    background: linear-gradient(135deg, rgba(79, 124, 255, 0.16), rgba(31, 183, 166, 0.12));
+  }
+  .template-card {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(7, 14, 25, 0.5);
+    padding: 1rem;
+  }
+  .section-anchor-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+  .empty-illustration {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 1rem;
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+  }
+  .table-shell {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 27, 0.52);
+    overflow: hidden;
+  }
+  .preview-metric {
+    border-radius: 0.9rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 28, 0.62);
+    padding: 0.9rem 1rem;
+  }
+  .preview-mode-card {
+    border-radius: 0.95rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 28, 0.55);
+    padding: 0.95rem;
+  }
+  .preview-field-muted {
+    opacity: 0.45;
+  }
+  @media (max-width: 1279px) {
+    .integrations-layout {
+      grid-template-columns: 1fr;
+    }
+    .integrations-sticky {
+      position: static;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="flex flex-col xl:flex-row gap-6">
-  <div class="w-full xl:w-64 flex-shrink-0 space-y-4">
-    <div class="card p-4">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
-      <div class="space-y-1">
+{% set selected_guild = (guilds | selectattr('guild_id', 'equalto', guild_id) | list | first) if guild_id else none %}
+
+<div class="integrations-layout">
+  <aside class="integrations-sticky space-y-4">
+    <div class="card p-4 space-y-4">
+      <div>
+        <p class="text-xs uppercase tracking-[0.24em] text-sky-300/70">Workspace</p>
+        <h2 class="mt-2 text-lg font-semibold text-white">Choose a guild</h2>
+        <p class="mt-1 text-sm text-slate-400">Switch the integration workspace to review subscriptions, GitHub previews, and workflow defaults for a specific server.</p>
+      </div>
+
+      {% if guilds|length > 1 %}
+      <form method="get" action="/integrations" class="field-stack">
+        <label for="guild-selector" class="text-xs text-slate-400">Guild</label>
+        <select id="guild-selector" name="guild_id" class="input" onchange="this.form.submit()">
+          <option value="" {% if not guild_id %}selected{% endif %} disabled>Choose a guild…</option>
+          {% for g in guilds %}
+          <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_name }} — {{ g.guild_id }}</option>
+          {% endfor %}
+        </select>
+      </form>
+
+      <div class="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
         {% for g in guilds %}
-        <a href="/integrations?guild_id={{ g.guild_id }}"
-           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
-           style="text-decoration:none;">
-          <i class="fa fa-server text-xs"></i>
-          <span class="font-mono">{{ g.guild_id }}</span>
+        <a href="/integrations?guild_id={{ g.guild_id }}" class="guild-tile {% if guild_id == g.guild_id %}active{% endif %}">
+          <span class="text-sm font-medium text-white">{{ g.guild_name }}</span>
+          <span class="text-xs font-mono text-slate-400">{{ g.guild_id }}</span>
         </a>
-        {% else %}
-        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
         {% endfor %}
       </div>
+      {% elif guilds %}
+      <div class="guild-tile active">
+        <span class="text-sm font-medium text-white">{{ guilds[0].guild_name }}</span>
+        <span class="text-xs font-mono text-slate-400">{{ guilds[0].guild_id }}</span>
+      </div>
+      {% else %}
+      <div class="soft-panel p-5 text-center">
+        <div class="empty-illustration mx-auto mb-3"><i class="fa fa-server"></i></div>
+        <p class="text-sm text-slate-400">No guilds found for this account.</p>
+      </div>
+      {% endif %}
     </div>
 
-    <div class="card p-4">
-      <h3 class="text-sm font-semibold text-gray-300 mb-2">GitHub API</h3>
-      <p class="text-sm {{ 'text-green-400' if github_token_configured else 'text-yellow-400' }}">
-        {{ 'Authenticated token configured' if github_token_configured else 'No GitHub token configured' }}
-      </p>
-      <p class="text-xs text-gray-500 mt-2">Without a token, GitHub rate limits get grumpy fast.</p>
-    </div>
-  </div>
-
-  <div class="flex-1 min-w-0 space-y-6">
-    {% if not guild_id %}
-    <div class="card p-12 text-center">
-      <i class="fa fa-code-branch text-4xl text-gray-700 mb-3"></i>
-      <p class="text-gray-400">Select a guild to manage GitHub subscriptions and integration health.</p>
-    </div>
-    {% else %}
-
-    <div class="card p-5 space-y-5">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between gap-3">
         <div>
-          <h2 class="font-semibold text-white">GitHub workflow settings</h2>
-          <p class="text-sm text-gray-500">Configure the default repo, daily review digest, and issue template defaults used by the Discord commands.</p>
+          <p class="text-xs uppercase tracking-[0.24em] text-slate-500">GitHub API</p>
+          <h3 class="mt-1 text-sm font-semibold text-white">Connection health</h3>
+        </div>
+        <span class="kbd-pill {{ 'bg-emerald-500/10 border-emerald-400/20 text-emerald-200' if github_token_configured else 'bg-amber-500/10 border-amber-400/20 text-amber-200' }}">
+          <i class="fa {{ 'fa-circle-check' if github_token_configured else 'fa-triangle-exclamation' }}"></i>
+          {{ 'Ready' if github_token_configured else 'Limited' }}
+        </span>
+      </div>
+      <p class="text-sm {{ 'text-emerald-300' if github_token_configured else 'text-amber-300' }}">
+        {{ 'Authenticated token configured for live preview and write actions.' if github_token_configured else 'No token configured. Live previews may rate-limit quickly and write actions will fail.' }}
+      </p>
+      <div class="soft-panel p-3 text-xs text-slate-400">
+        Use this page to configure the repo defaults the Discord commands fall back to. If the bot feels inconsistent, this is usually the first place to check.
+      </div>
+    </div>
+
+    <div class="card p-4 space-y-3">
+      <h3 class="text-sm font-semibold text-white">Quick guide</h3>
+      <div class="space-y-3 text-sm text-slate-400">
+        <div>
+          <p class="text-slate-200 font-medium">1. Set the default repo</p>
+          <p>That unlocks milestones, digest defaults, and preview fallbacks.</p>
+        </div>
+        <div>
+          <p class="text-slate-200 font-medium">2. Save issue templates</p>
+          <p>Use labels, assignees, and milestones to keep Discord-created issues consistent.</p>
+        </div>
+        <div>
+          <p class="text-slate-200 font-medium">3. Preview before going live</p>
+          <p>Check the queue, digest, or triage output before moderators rely on it.</p>
         </div>
       </div>
+    </div>
+  </aside>
 
-      <form method="post" action="/integrations/github/workflow_save" class="space-y-5">
+  <div class="space-y-6 min-w-0">
+    {% if not guild_id %}
+    <section class="page-hero p-10 text-center">
+      <div class="empty-illustration mx-auto mb-4"><i class="fa fa-code-branch text-lg"></i></div>
+      <h2 class="text-2xl font-semibold text-white">Pick a guild to open its integration workspace</h2>
+      <p class="mt-3 text-sm text-slate-400 max-w-2xl mx-auto">This page is where you configure GitHub subscriptions, issue templates, review digests, and live workflow previews for each Discord server.</p>
+    </section>
+    {% else %}
+
+    <section class="page-hero p-6 xl:p-8">
+      <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
+        <div class="max-w-3xl">
+          <p class="text-xs uppercase tracking-[0.24em] text-sky-300/70">GitHub workspace</p>
+          <h2 class="mt-3 text-2xl xl:text-3xl font-semibold text-white">{{ selected_guild.guild_name if selected_guild else ('Guild ' ~ guild_id) }}</h2>
+          <p class="mt-2 text-sm text-slate-300">Tune how this server watches repositories, creates issues, and surfaces review work. The layout below is organized in the same order most admins set things up.</p>
+
+          <div class="section-anchor-bar">
+            <a href="#workflow-settings" class="section-chip"><i class="fa fa-sliders"></i> Workflow defaults</a>
+            <a href="#preview-panel" class="section-chip"><i class="fa fa-eye"></i> Live preview</a>
+            <a href="#reviewer-links" class="section-chip"><i class="fa fa-link"></i> Reviewer links</a>
+            <a href="#subscriptions" class="section-chip"><i class="fa fa-bell"></i> Subscriptions</a>
+            <a href="#poll-state" class="section-chip"><i class="fa fa-wave-square"></i> Poll state</a>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 xl:min-w-[22rem]">
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Subscriptions</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ subscriptions|length }}</p>
+            <p class="mt-1 text-xs text-slate-400">Repos currently broadcasting into Discord.</p>
+          </div>
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Reviewer links</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ github_user_links|length }}</p>
+            <p class="mt-1 text-xs text-slate-400">Discord users mapped to GitHub identities.</p>
+          </div>
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Poll state rows</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ poll_state|length }}</p>
+            <p class="mt-1 text-xs text-slate-400">Saved cursors keeping backlog replay under control.</p>
+          </div>
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Default repo</p>
+            <p class="mt-2 text-base font-semibold text-white break-all">{{ github_workflow.default_repo or 'Not set' }}</p>
+            <p class="mt-1 text-xs text-slate-400">Used by issue, digest, and preview fallbacks.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflow-settings" class="card p-5 xl:p-6 space-y-6">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Workflow settings</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">Default behavior for Discord-side GitHub commands</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">These values become the shared baseline for issue creation, digest timing, and review previews. They are especially useful when moderators should not have to type the repo name every time.</p>
+        </div>
+        <span class="kbd-pill"><i class="fa fa-wand-magic-sparkles"></i> Saved per guild</span>
+      </div>
+
+      <form method="post" action="/integrations/github/workflow_save" class="space-y-6">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Default repo</label>
-            <input class="input" type="text" name="default_repo" value="{{ github_workflow.default_repo }}" placeholder="owner/repo"/>
+        <div class="soft-panel p-4 xl:p-5">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-sky-500/10 border border-sky-400/15 flex items-center justify-center text-sky-300">
+              <i class="fa fa-gear"></i>
+            </div>
+            <div>
+              <h4 class="text-sm font-semibold text-white">Core repo and digest settings</h4>
+              <p class="text-sm text-slate-400">Set the repo fallback and daily digest schedule before moving on to templates.</p>
+            </div>
           </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Review digest channel ID</label>
-            <input class="input" type="text" name="review_digest_channel" value="{{ github_workflow.review_digest_channel }}" placeholder="123456789012345678"/>
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Review digest repo</label>
-            <input class="input" type="text" name="review_digest_repo" value="{{ github_workflow.review_digest_repo }}" placeholder="owner/repo or leave blank for default repo"/>
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Review digest hour (UTC)</label>
-            <input class="input" type="number" min="0" max="23" name="review_digest_hour_utc" value="{{ github_workflow.review_digest_hour_utc }}"/>
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Review stale threshold (hours)</label>
-            <input class="input" type="number" min="1" name="review_digest_stale_hours" value="{{ github_workflow.review_digest_stale_hours }}"/>
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Default issue template</label>
-            <select class="input" name="issue_default_template">
-              <option value="" {% if not github_workflow.issue_default_template %}selected{% endif %}>None</option>
-              <option value="bug" {% if github_workflow.issue_default_template == 'bug' %}selected{% endif %}>Bug</option>
-              <option value="feature" {% if github_workflow.issue_default_template == 'feature' %}selected{% endif %}>Feature</option>
-              <option value="docs" {% if github_workflow.issue_default_template == 'docs' %}selected{% endif %}>Docs</option>
-            </select>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Default repo</span>
+              <input class="input" type="text" name="default_repo" value="{{ github_workflow.default_repo }}" placeholder="owner/repo"/>
+              <span class="helper-text">Used whenever a Discord command omits the repository.</span>
+            </label>
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Review digest channel ID</span>
+              <input class="input" type="text" name="review_digest_channel" value="{{ github_workflow.review_digest_channel }}" placeholder="123456789012345678"/>
+              <span class="helper-text">The daily digest is delivered here once the hour is reached.</span>
+            </label>
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Review digest repo</span>
+              <input class="input" type="text" name="review_digest_repo" value="{{ github_workflow.review_digest_repo }}" placeholder="owner/repo or leave blank"/>
+              <span class="helper-text">Leave empty to reuse the default repo above.</span>
+            </label>
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Review digest hour (UTC)</span>
+              <input class="input" type="number" min="0" max="23" name="review_digest_hour_utc" value="{{ github_workflow.review_digest_hour_utc }}"/>
+              <span class="helper-text">A single daily send is allowed after this hour passes.</span>
+            </label>
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Review stale threshold (hours)</span>
+              <input class="input" type="number" min="1" name="review_digest_stale_hours" value="{{ github_workflow.review_digest_stale_hours }}"/>
+              <span class="helper-text">Older PRs are surfaced in the stale bucket and digest.</span>
+            </label>
+            <label class="field-stack">
+              <span class="text-xs text-slate-400">Default issue template</span>
+              <select class="input" name="issue_default_template">
+                <option value="" {% if not github_workflow.issue_default_template %}selected{% endif %}>None</option>
+                <option value="bug" {% if github_workflow.issue_default_template == 'bug' %}selected{% endif %}>Bug</option>
+                <option value="feature" {% if github_workflow.issue_default_template == 'feature' %}selected{% endif %}>Feature</option>
+                <option value="docs" {% if github_workflow.issue_default_template == 'docs' %}selected{% endif %}>Docs</option>
+              </select>
+              <span class="helper-text">This template is preselected for Discord issue creation if one is not supplied.</span>
+            </label>
           </div>
         </div>
 
-        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Bug template</label>
-            <textarea class="input min-h-[180px]" name="issue_template_bug" placeholder="Problem summary&#10;&#10;Expected behavior&#10;&#10;Actual behavior&#10;&#10;Impact">{{ github_workflow.issue_templates.bug }}</textarea>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Bug labels</label>
-            <input class="input" type="text" name="issue_template_labels_bug" value="{{ github_workflow.issue_template_labels.bug }}" placeholder="bug, backend"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Bug assignees</label>
-            <input class="input" type="text" name="issue_template_assignees_bug" value="{{ github_workflow.issue_template_assignees.bug }}" placeholder="octocat, maintainer"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Bug milestone number</label>
-            <input class="input" type="text" name="issue_template_milestone_bug" value="{{ github_workflow.issue_template_milestones.bug }}" placeholder="1"/>
+        <div>
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-2xl bg-emerald-500/10 border border-emerald-400/15 flex items-center justify-center text-emerald-300">
+              <i class="fa fa-layer-group"></i>
+            </div>
+            <div>
+              <h4 class="text-sm font-semibold text-white">Issue template presets</h4>
+              <p class="text-sm text-slate-400">Each preset controls body copy, default labels, assignees, and milestone number for issues created from Discord.</p>
+            </div>
           </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Feature template</label>
-            <textarea class="input min-h-[180px]" name="issue_template_feature" placeholder="Requested change&#10;&#10;Why it matters&#10;&#10;Acceptance criteria">{{ github_workflow.issue_templates.feature }}</textarea>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Feature labels</label>
-            <input class="input" type="text" name="issue_template_labels_feature" value="{{ github_workflow.issue_template_labels.feature }}" placeholder="enhancement, roadmap"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Feature assignees</label>
-            <input class="input" type="text" name="issue_template_assignees_feature" value="{{ github_workflow.issue_template_assignees.feature }}" placeholder="product-owner"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Feature milestone number</label>
-            <input class="input" type="text" name="issue_template_milestone_feature" value="{{ github_workflow.issue_template_milestones.feature }}" placeholder="2"/>
-          </div>
-          <div>
-            <label class="text-xs text-gray-500 mb-1 block">Docs template</label>
-            <textarea class="input min-h-[180px]" name="issue_template_docs" placeholder="What is unclear&#10;&#10;Suggested documentation update&#10;&#10;Who is affected">{{ github_workflow.issue_templates.docs }}</textarea>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Docs labels</label>
-            <input class="input" type="text" name="issue_template_labels_docs" value="{{ github_workflow.issue_template_labels.docs }}" placeholder="docs"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Docs assignees</label>
-            <input class="input" type="text" name="issue_template_assignees_docs" value="{{ github_workflow.issue_template_assignees.docs }}" placeholder="docs-maintainer"/>
-            <label class="text-xs text-gray-500 mt-3 mb-1 block">Docs milestone number</label>
-            <input class="input" type="text" name="issue_template_milestone_docs" value="{{ github_workflow.issue_template_milestones.docs }}" placeholder="3"/>
+
+          <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <div class="template-card space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-400/15 flex items-center justify-center text-rose-300"><i class="fa fa-bug"></i></div>
+                <div>
+                  <h5 class="text-sm font-semibold text-white">Bug template</h5>
+                  <p class="text-xs text-slate-400">Good for regressions, incidents, and broken flows.</p>
+                </div>
+              </div>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Template body</span>
+                <textarea class="input min-h-[220px]" name="issue_template_bug" placeholder="Problem summary&#10;&#10;Expected behavior&#10;&#10;Actual behavior&#10;&#10;Impact">{{ github_workflow.issue_templates.bug }}</textarea>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Labels</span>
+                <input class="input" type="text" name="issue_template_labels_bug" value="{{ github_workflow.issue_template_labels.bug }}" placeholder="bug, backend"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Assignees</span>
+                <input class="input" type="text" name="issue_template_assignees_bug" value="{{ github_workflow.issue_template_assignees.bug }}" placeholder="octocat, maintainer"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Milestone number</span>
+                <input class="input" type="text" name="issue_template_milestone_bug" value="{{ github_workflow.issue_template_milestones.bug }}" placeholder="1"/>
+                <span class="helper-text">Validated against the configured default repo when you save.</span>
+              </label>
+            </div>
+
+            <div class="template-card space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-2xl bg-sky-500/10 border border-sky-400/15 flex items-center justify-center text-sky-300"><i class="fa fa-lightbulb"></i></div>
+                <div>
+                  <h5 class="text-sm font-semibold text-white">Feature template</h5>
+                  <p class="text-xs text-slate-400">Use for roadmap work, enhancements, and scoped improvements.</p>
+                </div>
+              </div>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Template body</span>
+                <textarea class="input min-h-[220px]" name="issue_template_feature" placeholder="Requested change&#10;&#10;Why it matters&#10;&#10;Acceptance criteria">{{ github_workflow.issue_templates.feature }}</textarea>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Labels</span>
+                <input class="input" type="text" name="issue_template_labels_feature" value="{{ github_workflow.issue_template_labels.feature }}" placeholder="enhancement, roadmap"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Assignees</span>
+                <input class="input" type="text" name="issue_template_assignees_feature" value="{{ github_workflow.issue_template_assignees.feature }}" placeholder="product-owner"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Milestone number</span>
+                <input class="input" type="text" name="issue_template_milestone_feature" value="{{ github_workflow.issue_template_milestones.feature }}" placeholder="2"/>
+              </label>
+            </div>
+
+            <div class="template-card space-y-4">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-400/15 flex items-center justify-center text-amber-300"><i class="fa fa-book"></i></div>
+                <div>
+                  <h5 class="text-sm font-semibold text-white">Docs template</h5>
+                  <p class="text-xs text-slate-400">Helpful for unclear setup steps, missing docs, and training gaps.</p>
+                </div>
+              </div>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Template body</span>
+                <textarea class="input min-h-[220px]" name="issue_template_docs" placeholder="What is unclear&#10;&#10;Suggested documentation update&#10;&#10;Who is affected">{{ github_workflow.issue_templates.docs }}</textarea>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Labels</span>
+                <input class="input" type="text" name="issue_template_labels_docs" value="{{ github_workflow.issue_template_labels.docs }}" placeholder="docs"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Assignees</span>
+                <input class="input" type="text" name="issue_template_assignees_docs" value="{{ github_workflow.issue_template_assignees.docs }}" placeholder="docs-maintainer"/>
+              </label>
+              <label class="field-stack">
+                <span class="text-xs text-slate-400">Milestone number</span>
+                <input class="input" type="text" name="issue_template_milestone_docs" value="{{ github_workflow.issue_template_milestones.docs }}" placeholder="3"/>
+              </label>
+            </div>
           </div>
         </div>
 
-        <div class="flex justify-end">
+        <div class="flex items-center justify-between gap-3 flex-wrap pt-2">
+          <p class="text-sm text-slate-400">Saving here immediately updates the defaults used by the Discord GitHub commands for this guild.</p>
           <button class="btn-primary" type="submit"><i class="fa fa-save"></i> Save workflow settings</button>
         </div>
       </form>
-    </div>
+    </section>
 
-    <div class="card p-5 space-y-5">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
+    <section id="preview-panel" class="card p-5 xl:p-6 space-y-5">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 class="font-semibold text-white">Review preview</h2>
-          <p class="text-sm text-gray-500">Preview the current review queue or digest output using live GitHub data before the scheduled digest runs.</p>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Live preview</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">See the output before your moderators do</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">Run a live queue, digest, or triage preview against GitHub. This is the fastest way to test thresholds and review load without waiting for the scheduler.</p>
+        </div>
+        <span class="kbd-pill"><i class="fa fa-bolt"></i> Live GitHub data</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="preview-mode-card">
+          <p class="text-sm font-semibold text-white">Review queue</p>
+          <p class="mt-1 text-sm text-slate-400">Best for seeing who still needs to review active pull requests right now.</p>
+        </div>
+        <div class="preview-mode-card">
+          <p class="text-sm font-semibold text-white">Digest preview</p>
+          <p class="mt-1 text-sm text-slate-400">Matches the daily scheduled message layout, including stale and load summaries.</p>
+        </div>
+        <div class="preview-mode-card">
+          <p class="text-sm font-semibold text-white">Issue triage</p>
+          <p class="mt-1 text-sm text-slate-400">Highlights unassigned, unlabeled, and stale issues that need cleanup.</p>
         </div>
       </div>
 
-      <form method="get" action="/integrations" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-end">
+      <form method="get" action="/integrations" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Preview type</label>
-          <select class="input" name="preview_mode">
+
+        <label class="field-stack">
+          <span class="text-xs text-slate-400">Preview type</span>
+          <select class="input" name="preview_mode" id="preview-mode-select">
             <option value="queue" {% if review_preview and review_preview.mode == 'queue' %}selected{% endif %}>Review queue</option>
             <option value="digest" {% if review_preview and review_preview.mode == 'digest' %}selected{% endif %}>Digest preview</option>
             <option value="triage" {% if review_preview and review_preview.mode == 'triage' %}selected{% endif %}>Issue triage</option>
           </select>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Repo</label>
+        </label>
+
+        <label class="field-stack xl:col-span-2">
+          <span class="text-xs text-slate-400">Repository</span>
           <input class="input" type="text" name="preview_repo" value="{{ review_preview.repo if review_preview else (github_workflow.review_digest_repo or github_workflow.default_repo) }}" placeholder="owner/repo"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Stale threshold (hours)</label>
+          <span class="helper-text">Defaults to the digest repo, then the default repo, if left blank.</span>
+        </label>
+
+        <label class="field-stack" data-preview-hours>
+          <span class="text-xs text-slate-400">Stale threshold (hours)</span>
           <input class="input" type="number" min="1" name="preview_stale_hours" value="{{ review_preview.stale_hours if review_preview else github_workflow.review_digest_stale_hours }}"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Triage stale threshold (days)</label>
+          <span class="helper-text">Used by review queue and digest previews.</span>
+        </label>
+
+        <label class="field-stack" data-preview-days>
+          <span class="text-xs text-slate-400">Triage stale threshold (days)</span>
           <input class="input" type="number" min="1" name="preview_stale_days" value="{{ review_preview.stale_days if review_preview and review_preview.stale_days is defined else 7 }}"/>
-        </div>
-        <button class="btn-primary" type="submit"><i class="fa fa-eye"></i> Preview</button>
+          <span class="helper-text">Used only for issue triage preview.</span>
+        </label>
+
+        <button class="btn-primary xl:col-span-5 xl:justify-center" type="submit"><i class="fa fa-eye"></i> Run live preview</button>
       </form>
 
       {% if review_preview %}
-      <div class="rounded-xl border border-gray-800 bg-gray-900/50 p-4 space-y-4">
+      <div class="soft-panel p-4 xl:p-5 space-y-5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h3 class="text-sm font-semibold text-white">{% if review_preview.mode == 'digest' %}Digest preview{% elif review_preview.mode == 'triage' %}Issue triage preview{% else %}Review queue preview{% endif %}{% if review_preview.repo %} — {{ review_preview.repo }}{% endif %}</h3>
-            <p class="text-xs text-gray-500">{% if review_preview.mode == 'triage' %}Stale threshold: {{ review_preview.stale_days }} day(s){% else %}Stale threshold: {{ review_preview.stale_hours }} hour(s){% endif %}</p>
+            <h4 class="text-lg font-semibold text-white">
+              {% if review_preview.mode == 'digest' %}Digest preview{% elif review_preview.mode == 'triage' %}Issue triage preview{% else %}Review queue preview{% endif %}
+              {% if review_preview.repo %}<span class="text-slate-400">— {{ review_preview.repo }}</span>{% endif %}
+            </h4>
+            <p class="mt-1 text-sm text-slate-400">
+              {% if review_preview.mode == 'triage' %}
+              Showing issue cleanup candidates using a {{ review_preview.stale_days }} day stale threshold.
+              {% else %}
+              Showing open PR work using a {{ review_preview.stale_hours }} hour stale threshold.
+              {% endif %}
+            </p>
           </div>
           {% if review_preview.total_open is defined %}
-          <span class="text-xs text-gray-500">{{ review_preview.total_open }} open {{ 'issues' if review_preview.mode == 'triage' else 'PRs' }}</span>
+          <span class="kbd-pill"><i class="fa fa-list-check"></i> {{ review_preview.total_open }} open {{ 'issues' if review_preview.mode == 'triage' else 'PRs' }}</span>
           {% endif %}
         </div>
 
         {% if review_preview.error %}
-        <p class="text-sm text-yellow-400">{{ review_preview.error }}</p>
+        <div class="rounded-2xl border border-amber-400/20 bg-amber-500/6 px-4 py-3 text-sm text-amber-200">
+          <div class="flex items-start gap-3">
+            <i class="fa fa-triangle-exclamation mt-0.5"></i>
+            <p>{{ review_preview.error }}</p>
+          </div>
+        </div>
         {% else %}
-        {% if review_preview.mode != 'triage' and review_preview.reviewer_load %}
-        <div>
-          <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Reviewer load</h4>
-          <div class="space-y-2">
-            {% for row in review_preview.reviewer_load %}
-            <div class="text-sm text-gray-300"><span class="font-mono">{{ row.reviewer }}</span> • {{ row.count }} pending • oldest #{{ row.oldest_number }} on {{ row.oldest_date }}</div>
-            {% endfor %}
-          </div>
-        </div>
-        {% endif %}
-
-        {% if review_preview.mode != 'triage' and review_preview.team_load %}
-        <div>
-          <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Team load</h4>
-          <div class="space-y-2">
-            {% for row in review_preview.team_load %}
-            <div class="text-sm text-gray-300"><span class="font-mono">{{ row.team }}</span> • {{ row.count }} pending • oldest #{{ row.oldest_number }} on {{ row.oldest_date }}</div>
-            {% endfor %}
-          </div>
-        </div>
-        {% endif %}
-
         {% if review_preview.mode == 'triage' %}
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div class="rounded-lg border border-gray-800 p-3 text-sm text-gray-300">Unassigned: <span class="text-white">{{ review_preview.counts.unassigned }}</span></div>
-          <div class="rounded-lg border border-gray-800 p-3 text-sm text-gray-300">Unlabeled: <span class="text-white">{{ review_preview.counts.unlabeled }}</span></div>
-          <div class="rounded-lg border border-gray-800 p-3 text-sm text-gray-300">Stale: <span class="text-white">{{ review_preview.counts.stale }}</span></div>
+          <div class="preview-metric">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Unassigned</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ review_preview.counts.unassigned }}</p>
+            <p class="mt-1 text-xs text-slate-400">Issues that need a clear owner.</p>
+          </div>
+          <div class="preview-metric">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Unlabeled</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ review_preview.counts.unlabeled }}</p>
+            <p class="mt-1 text-xs text-slate-400">Issues that may be hard to route or filter.</p>
+          </div>
+          <div class="preview-metric">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Stale</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ review_preview.counts.stale }}</p>
+            <p class="mt-1 text-xs text-slate-400">Issues older than the chosen threshold.</p>
+          </div>
+        </div>
+        {% else %}
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div class="soft-panel p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <i class="fa fa-user-clock text-sky-300"></i>
+              <h5 class="text-sm font-semibold text-white">Reviewer load</h5>
+            </div>
+            {% if review_preview.reviewer_load %}
+            <div class="space-y-2">
+              {% for row in review_preview.reviewer_load %}
+              <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-700/40 bg-slate-950/35 px-3 py-2 text-sm text-slate-300">
+                <span class="font-mono text-white">{{ row.reviewer }}</span>
+                <span>{{ row.count }} pending</span>
+                <span class="text-xs text-slate-500">oldest #{{ row.oldest_number }} · {{ row.oldest_date }}</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500">No direct reviewer assignments are pending in this preview.</p>
+            {% endif %}
+          </div>
+
+          <div class="soft-panel p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <i class="fa fa-people-group text-emerald-300"></i>
+              <h5 class="text-sm font-semibold text-white">Team load</h5>
+            </div>
+            {% if review_preview.team_load %}
+            <div class="space-y-2">
+              {% for row in review_preview.team_load %}
+              <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-700/40 bg-slate-950/35 px-3 py-2 text-sm text-slate-300">
+                <span class="font-mono text-white">{{ row.team }}</span>
+                <span>{{ row.count }} pending</span>
+                <span class="text-xs text-slate-500">oldest #{{ row.oldest_number }} · {{ row.oldest_date }}</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500">No requested GitHub teams are currently driving the review queue.</p>
+            {% endif %}
+          </div>
         </div>
         {% endif %}
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {% for section in review_preview.sections %}
-          <div class="rounded-lg border border-gray-800 p-3">
-            <h4 class="text-sm font-semibold text-white mb-3">{{ section.label }} ({{ section.count }})</h4>
+          <div class="soft-panel p-4">
+            <div class="flex items-center justify-between gap-3 mb-3">
+              <h5 class="text-sm font-semibold text-white">{{ section.label }}</h5>
+              <span class="kbd-pill">{{ section.count }}</span>
+            </div>
             <div class="space-y-3">
               {% for item in section.items %}
-              <div class="text-sm text-gray-300">
-                <a href="{{ item.url }}" target="_blank" rel="noopener" class="text-white hover:text-blue-300 no-underline">#{{ item.number }} {{ item.title }}</a>
-                <div class="text-xs text-gray-500 mt-1">by {{ item.author }} • updated {{ item.updated_at }}</div>
+              <div class="rounded-xl border border-slate-700/40 bg-slate-950/35 p-3 text-sm text-slate-300">
+                <a href="{{ item.url }}" target="_blank" rel="noopener" class="text-white hover:text-sky-300 no-underline font-medium">#{{ item.number }} {{ item.title }}</a>
+                <div class="mt-1 text-xs text-slate-500">by {{ item.author }} · updated {{ item.updated_at }}</div>
                 {% if review_preview.mode == 'triage' %}
                 {% if item.labels %}
-                <div class="text-xs text-gray-500 mt-1">Labels: {{ item.labels | join(', ') }}</div>
+                <div class="mt-2 text-xs text-slate-400">Labels: {{ item.labels | join(', ') }}</div>
                 {% endif %}
                 {% if item.assignees %}
-                <div class="text-xs text-gray-500 mt-1">Assignees: {{ item.assignees | join(', ') }}</div>
+                <div class="mt-1 text-xs text-slate-400">Assignees: {{ item.assignees | join(', ') }}</div>
                 {% endif %}
                 {% elif item.requested %}
-                <div class="text-xs text-gray-500 mt-1">Requested: {{ item.requested | join(', ') }}</div>
+                <div class="mt-2 text-xs text-slate-400">Requested: {{ item.requested | join(', ') }}</div>
                 {% elif item.changes_requested %}
-                <div class="text-xs text-yellow-400 mt-1">Changes requested</div>
+                <div class="mt-2 text-xs text-amber-300">Changes requested</div>
                 {% elif item.approvals %}
-                <div class="text-xs text-green-400 mt-1">{{ item.approvals }} approval(s)</div>
+                <div class="mt-2 text-xs text-emerald-300">{{ item.approvals }} approval(s)</div>
                 {% endif %}
               </div>
               {% endfor %}
             </div>
           </div>
           {% else %}
-          <p class="text-sm text-gray-500">No active review sections for this repo.</p>
+          <div class="soft-panel p-8 text-center xl:col-span-2">
+            <div class="empty-illustration mx-auto mb-3"><i class="fa fa-inbox"></i></div>
+            <p class="text-sm text-slate-400">No active sections were produced for this repo and preview mode.</p>
+          </div>
           {% endfor %}
         </div>
 
         {% if review_preview.draft_count %}
-        <p class="text-xs text-gray-500">{{ review_preview.draft_count }} draft PR(s) hidden from the active queue.</p>
+        <p class="text-xs text-slate-500">{{ review_preview.draft_count }} draft PR(s) are hidden from the active review sections.</p>
         {% endif %}
         {% endif %}
       </div>
       {% endif %}
-    </div>
+    </section>
 
-    <div class="card p-5">
-      <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+    <section id="reviewer-links" class="card p-5 xl:p-6 space-y-5">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 class="font-semibold text-white">Reviewer account links</h2>
-          <p class="text-sm text-gray-500">Map Discord user IDs to GitHub usernames so review commands and digests can line up ownership.</p>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Reviewer mapping</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">Link Discord people to GitHub reviewers</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">This makes personal review views and future ownership reporting more useful by aligning Discord accounts with GitHub usernames.</p>
         </div>
-        <span class="text-xs text-gray-500">{{ github_user_links|length }} linked</span>
+        <span class="kbd-pill"><i class="fa fa-link"></i> {{ github_user_links|length }} linked</span>
       </div>
 
-      <form method="post" action="/integrations/github/user_link_save" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mb-6 items-end">
+      <form method="post" action="/integrations/github/user_link_save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Discord user ID</label>
+        <label class="field-stack">
+          <span class="text-xs text-slate-400">Discord user ID</span>
           <input class="input" type="text" name="discord_user_id" placeholder="123456789012345678" required/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">GitHub username</label>
+          <span class="helper-text">Paste the numeric Discord ID of the reviewer.</span>
+        </label>
+        <label class="field-stack">
+          <span class="text-xs text-slate-400">GitHub username</span>
           <input class="input" type="text" name="github_username" placeholder="octocat" required/>
-        </div>
-        <button class="btn-primary" type="submit"><i class="fa fa-link"></i> Save link</button>
+          <span class="helper-text">Used by review queue and personal review commands.</span>
+        </label>
+        <button class="btn-primary" type="submit"><i class="fa fa-link"></i> Save reviewer link</button>
       </form>
 
-      <div class="overflow-x-auto">
+      <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+            <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
               <th class="px-4 py-3 font-medium">Discord user ID</th>
               <th class="px-4 py-3 font-medium">GitHub username</th>
               <th class="px-4 py-3 font-medium">Actions</th>
@@ -272,54 +616,63 @@
           <tbody>
             {% for row in github_user_links %}
             <tr class="table-row">
-              <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ row.discord_user_id }}</td>
-              <td class="px-4 py-3 text-gray-200">{{ row.github_username }}</td>
+              <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ row.discord_user_id }}</td>
+              <td class="px-4 py-3 text-white font-medium">{{ row.github_username }}</td>
               <td class="px-4 py-3">
                 <form method="post" action="/integrations/github/user_link_delete" onsubmit="return confirm('Delete this Discord to GitHub mapping?')">
                   <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
                   <input type="hidden" name="discord_user_id" value="{{ row.discord_user_id }}"/>
-                  <button class="btn-danger" type="submit"><i class="fa fa-trash"></i></button>
+                  <button class="btn-danger" type="submit"><i class="fa fa-trash"></i> Remove</button>
                 </form>
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="px-4 py-10 text-center text-gray-500">No Discord to GitHub reviewer links configured yet.</td></tr>
+            <tr>
+              <td colspan="3" class="px-4 py-10 text-center">
+                <div class="empty-illustration mx-auto mb-3"><i class="fa fa-link-slash"></i></div>
+                <p class="text-sm text-slate-400">No reviewer links yet. Add a mapping to make ownership views more useful.</p>
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <div class="card p-5">
-      <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+    <section id="subscriptions" class="card p-5 xl:p-6 space-y-5">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 class="font-semibold text-white">GitHub subscriptions</h2>
-          <p class="text-sm text-gray-500">Watch pushes, PRs, issues, and releases in any channel.</p>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Repository watchlist</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">GitHub subscriptions</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">These subscriptions drive the live event feed into Discord channels. Use reset cursor if a repo gets out of sync and you need the poller to re-seed from the latest event.</p>
         </div>
-        <span class="text-xs text-gray-500">{{ subscriptions|length }} active</span>
+        <span class="kbd-pill"><i class="fa fa-bell"></i> {{ subscriptions|length }} active</span>
       </div>
 
-      <form method="post" action="/integrations/github/save" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mb-6 items-end">
+      <form method="post" action="/integrations/github/save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Repo</label>
+        <label class="field-stack xl:col-span-2">
+          <span class="text-xs text-slate-400">Repository</span>
           <input class="input" type="text" name="repo" placeholder="owner/repo" required/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-500 mb-1 block">Channel ID</label>
+          <span class="helper-text">The repo to watch for pushes, PRs, issues, and releases.</span>
+        </label>
+        <label class="field-stack">
+          <span class="text-xs text-slate-400">Channel ID</span>
           <input class="input" type="number" name="channel_id" placeholder="123456789012345678" required/>
-        </div>
-        <div class="xl:col-span-2">
-          <label class="text-xs text-gray-500 mb-1 block">Events</label>
+          <span class="helper-text">Discord channel receiving the updates.</span>
+        </label>
+        <label class="field-stack xl:col-span-2">
+          <span class="text-xs text-slate-400">Events</span>
           <input class="input" type="text" name="events" value="push,pull_request,issues,release" placeholder="push,pull_request,issues,release" required/>
-        </div>
-        <button class="btn-primary" type="submit"><i class="fa fa-plus"></i> Save subscription</button>
+          <span class="helper-text">Comma-separated GitHub event families to include.</span>
+        </label>
+        <button class="btn-primary xl:col-span-5 xl:justify-center" type="submit"><i class="fa fa-plus"></i> Save subscription</button>
       </form>
 
-      <div class="overflow-x-auto">
+      <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+            <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
               <th class="px-4 py-3 font-medium">Repo</th>
               <th class="px-4 py-3 font-medium">Channel</th>
               <th class="px-4 py-3 font-medium">Events</th>
@@ -330,12 +683,12 @@
           <tbody>
             {% for row in subscriptions %}
             <tr class="table-row">
-              <td class="px-4 py-3 text-gray-200 font-medium">{{ row.repo }}</td>
-              <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ row.channel_id }}</td>
-              <td class="px-4 py-3 text-gray-400 text-xs break-all">{{ row.events }}</td>
-              <td class="px-4 py-3 text-gray-500 text-xs">{{ row.created_at[:16] if row.created_at else '—' }}</td>
+              <td class="px-4 py-3 text-white font-medium">{{ row.repo }}</td>
+              <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ row.channel_id }}</td>
+              <td class="px-4 py-3 text-slate-400 text-xs break-all">{{ row.events }}</td>
+              <td class="px-4 py-3 text-slate-500 text-xs">{{ row.created_at[:16] if row.created_at else '—' }}</td>
               <td class="px-4 py-3">
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
                   <form method="post" action="/integrations/github/reset_state" onsubmit="return confirm('Reset saved GitHub poll state for this repo? The next poll will resync from the latest event without replaying backlog.')">
                     <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
                     <input type="hidden" name="repo" value="{{ row.repo }}"/>
@@ -344,33 +697,40 @@
                   <form method="post" action="/integrations/github/delete" onsubmit="return confirm('Delete this GitHub subscription?')">
                     <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
                     <input type="hidden" name="subscription_id" value="{{ row.id }}"/>
-                    <button class="btn-danger" type="submit"><i class="fa fa-trash"></i></button>
+                    <button class="btn-danger" type="submit"><i class="fa fa-trash"></i> Remove</button>
                   </form>
                 </div>
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="5" class="px-4 py-10 text-center text-gray-500">No GitHub subscriptions configured yet.</td></tr>
+            <tr>
+              <td colspan="5" class="px-4 py-10 text-center">
+                <div class="empty-illustration mx-auto mb-3"><i class="fa fa-bell-slash"></i></div>
+                <p class="text-sm text-slate-400">No GitHub subscriptions are configured yet.</p>
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
 
-    <div class="card p-5">
-      <div class="flex items-center justify-between gap-3 flex-wrap mb-4">
+    <section id="poll-state" class="card p-5 xl:p-6 space-y-5">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h2 class="font-semibold text-white">Poll state</h2>
-          <p class="text-sm text-gray-500">Last-seen event markers and ETags for subscribed repositories.</p>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Poller health</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">Saved poll state</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">These rows are the cursor and cache markers used by the GitHub poller. They usually require no action unless a repo has to be resynced.</p>
         </div>
-        <span class="text-xs text-gray-500">{{ poll_state|length }} rows</span>
+        <span class="kbd-pill"><i class="fa fa-wave-square"></i> {{ poll_state|length }} rows</span>
       </div>
-      <div class="overflow-x-auto">
+
+      <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+            <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
               <th class="px-4 py-3 font-medium">Repo</th>
-              <th class="px-4 py-3 font-medium">Event Type</th>
+              <th class="px-4 py-3 font-medium">Event type</th>
               <th class="px-4 py-3 font-medium">Last ID</th>
               <th class="px-4 py-3 font-medium">Updated</th>
               <th class="px-4 py-3 font-medium">Action</th>
@@ -379,10 +739,10 @@
           <tbody>
             {% for row in poll_state %}
             <tr class="table-row">
-              <td class="px-4 py-3 text-gray-200">{{ row.repo }}</td>
-              <td class="px-4 py-3 text-gray-400">{{ row.event_type }}</td>
-              <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ row.last_id or '—' }}</td>
-              <td class="px-4 py-3 text-gray-500 text-xs">{{ row.updated_at[:16] if row.updated_at else '—' }}</td>
+              <td class="px-4 py-3 text-white font-medium">{{ row.repo }}</td>
+              <td class="px-4 py-3 text-slate-300">{{ row.event_type }}</td>
+              <td class="px-4 py-3 text-slate-400 font-mono text-xs">{{ row.last_id or '—' }}</td>
+              <td class="px-4 py-3 text-slate-500 text-xs">{{ row.updated_at[:16] if row.updated_at else '—' }}</td>
               <td class="px-4 py-3">
                 <form method="post" action="/integrations/github/reset_state" onsubmit="return confirm('Reset saved GitHub poll state for this repo? The next poll will resync from the latest event without replaying backlog.')">
                   <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
@@ -392,14 +752,43 @@
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="5" class="px-4 py-10 text-center text-gray-500">No poll state yet. Once the poller sees events, they’ll show up here.</td></tr>
+            <tr>
+              <td colspan="5" class="px-4 py-10 text-center">
+                <div class="empty-illustration mx-auto mb-3"><i class="fa fa-wave-square"></i></div>
+                <p class="text-sm text-slate-400">No poll state yet. Once the poller sees events, they will appear here.</p>
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
 
     {% endif %}
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const modeSelect = document.getElementById('preview-mode-select');
+    const hoursField = document.querySelector('[data-preview-hours]');
+    const daysField = document.querySelector('[data-preview-days]');
+
+    const updatePreviewFieldState = () => {
+      if (!modeSelect || !hoursField || !daysField) {
+        return;
+      }
+      const triageMode = modeSelect.value === 'triage';
+      hoursField.classList.toggle('preview-field-muted', triageMode);
+      daysField.classList.toggle('preview-field-muted', !triageMode);
+    };
+
+    if (modeSelect) {
+      modeSelect.addEventListener('change', updatePreviewFieldState);
+      updatePreviewFieldState();
+    }
+  });
+</script>
 {% endblock %}
