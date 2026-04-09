@@ -3,10 +3,11 @@ from __future__ import annotations
 import tempfile
 import unittest
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import AsyncMock
 
 import dashboard.app as dashboard_app
-from dashboard.routes.github_integrations import build_review_preview, build_triage_preview
+from dashboard.routes.github_integrations import FORM_STATE_CACHE, _take_form_state, build_review_preview, build_triage_preview
 
 
 class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
@@ -23,6 +24,7 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         self._original_github_get = dashboard_app.github_integrations._github_get
         self._tmpdir = tempfile.TemporaryDirectory()
         dashboard_app.DB_PATH = f"{self._tmpdir.name}/test.db"
+        FORM_STATE_CACHE.clear()
 
         await dashboard_app.db_execute(
             """
@@ -64,6 +66,7 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         dashboard_app.DB_PATH = self._original_db_path
         dashboard_app.github_integrations._github_get = self._original_github_get
+        FORM_STATE_CACHE.clear()
         self._tmpdir.cleanup()
 
     async def test_reset_route_clears_poll_state_for_subscribed_repo(self) -> None:
@@ -80,7 +83,9 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         response = await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["location"], "/integrations?guild_id=1")
+        self.assertIn("/integrations?guild_id=1", response.headers["location"])
+        self.assertIn("flash=success", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#poll-state"))
         row = await dashboard_app.db_fetchone(
             "SELECT * FROM github_poll_state WHERE repo = ?",
             ("owner/repo",),
@@ -90,10 +95,11 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_reset_route_rejects_repo_not_in_guild(self) -> None:
         request = SimpleNamespace(session=self._session([1]))
 
-        with self.assertRaises(dashboard_app.HTTPException) as exc:
-            await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
+        response = await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
 
-        self.assertEqual(exc.exception.status_code, 404)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=error", response.headers["location"])
+        self.assertIn("poll-state", response.headers["location"])
 
     async def test_reset_route_rejects_user_without_guild_access(self) -> None:
         await dashboard_app.db_execute(
@@ -136,7 +142,9 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.headers["location"], "/integrations?guild_id=1")
+        self.assertIn("/integrations?guild_id=1", response.headers["location"])
+        self.assertIn("flash=success", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#workflow-settings"))
         rows = await dashboard_app.db_fetchall(
             "SELECT key, value FROM guild_config WHERE guild_id = ? ORDER BY key",
             (1,),
@@ -156,62 +164,73 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
     async def test_workflow_save_rejects_invalid_default_repo(self) -> None:
         request = SimpleNamespace(session=self._session([1]))
 
-        with self.assertRaises(dashboard_app.HTTPException) as exc:
-            await dashboard_app.integrations_github_workflow_save(
-                request,
-                guild_id=1,
-                default_repo="not a repo",
-                review_digest_channel="",
-                review_digest_hour_utc="13",
-                review_digest_repo="",
-                review_digest_stale_hours="24",
-                issue_default_template="",
-                issue_template_bug="",
-                issue_template_feature="",
-                issue_template_docs="",
-                issue_template_labels_bug="",
-                issue_template_labels_feature="",
-                issue_template_labels_docs="",
-                issue_template_assignees_bug="",
-                issue_template_assignees_feature="",
-                issue_template_assignees_docs="",
-                issue_template_milestone_bug="",
-                issue_template_milestone_feature="",
-                issue_template_milestone_docs="",
-            )
+        response = await dashboard_app.integrations_github_workflow_save(
+            request,
+            guild_id=1,
+            default_repo="not a repo",
+            review_digest_channel="",
+            review_digest_hour_utc="13",
+            review_digest_repo="",
+            review_digest_stale_hours="24",
+            issue_default_template="",
+            issue_template_bug="",
+            issue_template_feature="",
+            issue_template_docs="",
+            issue_template_labels_bug="",
+            issue_template_labels_feature="",
+            issue_template_labels_docs="",
+            issue_template_assignees_bug="",
+            issue_template_assignees_feature="",
+            issue_template_assignees_docs="",
+            issue_template_milestone_bug="",
+            issue_template_milestone_feature="",
+            issue_template_milestone_docs="",
+        )
 
-        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=error", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#workflow-settings"))
+
+        parsed = urlparse(response.headers["location"])
+        draft_token = parse_qs(parsed.query)["draft"][0]
+        draft = _take_form_state(draft_token, 1)
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft["form_name"], "workflow")
+        self.assertEqual(draft["values"]["default_repo"], "not a repo")
+        self.assertEqual(draft["values"]["review_digest_hour_utc"], "13")
 
     async def test_workflow_save_rejects_missing_milestone(self) -> None:
         request = SimpleNamespace(session=self._session([1]))
         dashboard_app.github_integrations._github_get = AsyncMock(return_value=(404, {"message": "Not Found"}))
 
-        with self.assertRaises(dashboard_app.HTTPException) as exc:
-            await dashboard_app.integrations_github_workflow_save(
-                request,
-                guild_id=1,
-                default_repo="owner/repo",
-                review_digest_channel="",
-                review_digest_hour_utc="13",
-                review_digest_repo="",
-                review_digest_stale_hours="24",
-                issue_default_template="",
-                issue_template_bug="",
-                issue_template_feature="",
-                issue_template_docs="",
-                issue_template_labels_bug="",
-                issue_template_labels_feature="",
-                issue_template_labels_docs="",
-                issue_template_assignees_bug="",
-                issue_template_assignees_feature="",
-                issue_template_assignees_docs="",
-                issue_template_milestone_bug="99",
-                issue_template_milestone_feature="",
-                issue_template_milestone_docs="",
-            )
+        response = await dashboard_app.integrations_github_workflow_save(
+            request,
+            guild_id=1,
+            default_repo="owner/repo",
+            review_digest_channel="",
+            review_digest_hour_utc="13",
+            review_digest_repo="",
+            review_digest_stale_hours="24",
+            issue_default_template="",
+            issue_template_bug="",
+            issue_template_feature="",
+            issue_template_docs="",
+            issue_template_labels_bug="",
+            issue_template_labels_feature="",
+            issue_template_labels_docs="",
+            issue_template_assignees_bug="",
+            issue_template_assignees_feature="",
+            issue_template_assignees_docs="",
+            issue_template_milestone_bug="99",
+            issue_template_milestone_feature="",
+            issue_template_milestone_docs="",
+        )
 
-        self.assertEqual(exc.exception.status_code, 400)
-        self.assertIn("milestone #99", exc.exception.detail)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=error", response.headers["location"])
+        self.assertIn("milestone+%2399", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#workflow-settings"))
 
     async def test_user_link_save_persists_mapping(self) -> None:
         request = SimpleNamespace(session=self._session([1]))
@@ -224,11 +243,43 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=success", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#reviewer-links"))
         row = await dashboard_app.db_fetchone(
             "SELECT value FROM guild_config WHERE guild_id = ? AND key = ?",
             (1, "github_username_123456789"),
         )
         self.assertEqual(row["value"], "octocat")
+
+    async def test_user_link_save_rejects_invalid_discord_id_with_error_flash(self) -> None:
+        request = SimpleNamespace(session=self._session([1]))
+
+        response = await dashboard_app.integrations_github_user_link_save(
+            request,
+            guild_id=1,
+            discord_user_id="abc",
+            github_username="octocat",
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=error", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#reviewer-links"))
+
+    def test_form_state_round_trip_is_single_use_and_guild_scoped(self) -> None:
+        token = dashboard_app.github_integrations._redirect_with_form_error(
+            1,
+            "Test message",
+            form_name="subscription",
+            values={"repo": "owner/repo", "channel_id": "15", "events": "push"},
+            anchor="subscriptions",
+        ).headers["location"]
+
+        draft_token = parse_qs(urlparse(token).query)["draft"][0]
+        wrong_guild = _take_form_state(draft_token, 2)
+        self.assertIsNone(wrong_guild)
+
+        remaining_tokens = list(FORM_STATE_CACHE.keys())
+        self.assertEqual(len(remaining_tokens), 0)
 
     async def test_user_link_delete_removes_mapping(self) -> None:
         await dashboard_app.db_execute(
@@ -244,6 +295,8 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.status_code, 302)
+        self.assertIn("flash=success", response.headers["location"])
+        self.assertTrue(response.headers["location"].endswith("#reviewer-links"))
         row = await dashboard_app.db_fetchone(
             "SELECT value FROM guild_config WHERE guild_id = ? AND key = ?",
             (1, "github_username_123456789"),

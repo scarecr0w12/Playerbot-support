@@ -78,12 +78,115 @@
   .preview-field-muted {
     opacity: 0.45;
   }
+  .copy-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 28, 0.62);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .copy-chip:hover {
+    transform: translateY(-1px);
+    border-color: rgba(96, 129, 255, 0.32);
+    background: rgba(15, 23, 42, 0.78);
+  }
+  .flash-banner {
+    border-radius: 1rem;
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+  }
+  .flash-banner.success {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(52, 211, 153, 0.24);
+    color: #d1fae5;
+  }
+  .flash-banner.info {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(96, 165, 250, 0.24);
+    color: #dbeafe;
+  }
+  .flash-banner.error {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(251, 191, 36, 0.24);
+    color: #fef3c7;
+  }
+  .setup-lane {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.9rem;
+  }
+  .setup-step {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 28, 0.55);
+    padding: 1rem;
+  }
+  .setup-step-number {
+    width: 1.8rem;
+    height: 1.8rem;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(79, 124, 255, 0.16);
+    color: #dbe7ff;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+  .accordion-block {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(9, 16, 29, 0.72);
+    overflow: hidden;
+  }
+  .accordion-block summary {
+    list-style: none;
+  }
+  .accordion-block summary::-webkit-details-marker {
+    display: none;
+  }
+  .accordion-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.25rem;
+    cursor: pointer;
+  }
+  .accordion-summary:hover {
+    background: rgba(15, 23, 42, 0.42);
+  }
+  .accordion-summary-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+  }
+  .accordion-chevron {
+    transition: transform 0.18s ease;
+    color: #94a3b8;
+  }
+  .accordion-block[open] .accordion-chevron {
+    transform: rotate(180deg);
+  }
+  .accordion-body {
+    padding: 0 1.25rem 1.25rem;
+  }
   @media (max-width: 1279px) {
     .integrations-layout {
       grid-template-columns: 1fr;
     }
     .integrations-sticky {
       position: static;
+    }
+    .setup-lane {
+      grid-template-columns: 1fr;
     }
   }
 </style>
@@ -116,7 +219,10 @@
         {% for g in guilds %}
         <a href="/integrations?guild_id={{ g.guild_id }}" class="guild-tile {% if guild_id == g.guild_id %}active{% endif %}">
           <span class="text-sm font-medium text-white">{{ g.guild_name }}</span>
-          <span class="text-xs font-mono text-slate-400">{{ g.guild_id }}</span>
+          <span class="flex items-center justify-between gap-2 text-xs font-mono text-slate-400">
+            <span>{{ g.guild_id }}</span>
+            <span class="copy-chip" data-copy-text="{{ g.guild_id }}" data-copy-label="Guild ID"><i class="fa fa-copy"></i> Copy</span>
+          </span>
         </a>
         {% endfor %}
       </div>
@@ -180,6 +286,15 @@
     </section>
     {% else %}
 
+    {% if flash %}
+    <div class="flash-msg flash-banner {{ flash.level if flash.level in ['success', 'info', 'error'] else 'info' }}">
+      <div class="flex items-start gap-3">
+        <i class="fa {% if flash.level == 'success' %}fa-circle-check{% elif flash.level == 'error' %}fa-triangle-exclamation{% else %}fa-circle-info{% endif %} mt-0.5"></i>
+        <p class="text-sm">{{ flash.message }}</p>
+      </div>
+    </div>
+    {% endif %}
+
     <section class="page-hero p-6 xl:p-8">
       <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
         <div class="max-w-3xl">
@@ -215,8 +330,60 @@
           <div class="stat-tile">
             <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Default repo</p>
             <p class="mt-2 text-base font-semibold text-white break-all">{{ github_workflow.default_repo or 'Not set' }}</p>
-            <p class="mt-1 text-xs text-slate-400">Used by issue, digest, and preview fallbacks.</p>
+            <div class="mt-1 flex items-center gap-2 flex-wrap">
+              <p class="text-xs text-slate-400">Used by issue, digest, and preview fallbacks.</p>
+              {% if github_workflow.default_repo %}
+              <button type="button" class="copy-chip" data-copy-text="{{ github_workflow.default_repo }}" data-copy-label="Default repo"><i class="fa fa-copy"></i> Copy repo</button>
+              {% endif %}
+            </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card p-5 xl:p-6 space-y-5">
+      <div class="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Recommended flow</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">Set this up in three passes</h3>
+          <p class="mt-2 text-sm text-slate-400 max-w-3xl">The page below is organized so you can configure the baseline first, verify the output second, and handle maintenance tasks last.</p>
+        </div>
+        <span class="kbd-pill"><i class="fa fa-compass"></i> Guided layout</span>
+      </div>
+
+      <div class="setup-lane">
+        <div class="setup-step">
+          <div class="setup-step-number">1</div>
+          <h4 class="mt-3 text-sm font-semibold text-white">Set the repo baseline</h4>
+          <p class="mt-2 text-sm text-slate-400">Configure the default repo, digest timing, and issue template presets so Discord commands have sensible defaults.</p>
+        </div>
+        <div class="setup-step">
+          <div class="setup-step-number">2</div>
+          <h4 class="mt-3 text-sm font-semibold text-white">Preview the result</h4>
+          <p class="mt-2 text-sm text-slate-400">Run queue, digest, or triage previews to confirm the thresholds and assignment summaries look right before relying on them.</p>
+        </div>
+        <div class="setup-step">
+          <div class="setup-step-number">3</div>
+          <h4 class="mt-3 text-sm font-semibold text-white">Handle maintenance</h4>
+          <p class="mt-2 text-sm text-slate-400">Open the accordion panels for reviewer links, subscriptions, and poll state only when you need to tune or troubleshoot them.</p>
+        </div>
+      </div>
+
+      <div class="soft-panel p-4 flex items-start gap-3">
+        <i class="fa fa-location-arrow text-sky-300 mt-0.5"></i>
+        <div>
+          <p class="text-sm font-medium text-white">Next best action</p>
+          <p class="mt-1 text-sm text-slate-400">
+            {% if not github_workflow.default_repo %}
+            Start in Workflow settings and add a default repo. Most of the other tools use it as their fallback.
+            {% elif not subscriptions %}
+            Your defaults are in place. Next, add at least one GitHub subscription so the server actually receives repo activity.
+            {% elif not github_user_links %}
+            The core integration is ready. Next, link Discord reviewers to GitHub usernames so ownership views are more useful.
+            {% else %}
+            The main setup is complete. Use the preview panel to validate output, then open the maintenance panels only when you need them.
+            {% endif %}
+          </p>
         </div>
       </div>
     </section>
@@ -228,7 +395,12 @@
           <h3 class="mt-2 text-xl font-semibold text-white">Default behavior for Discord-side GitHub commands</h3>
           <p class="mt-2 text-sm text-slate-400 max-w-3xl">These values become the shared baseline for issue creation, digest timing, and review previews. They are especially useful when moderators should not have to type the repo name every time.</p>
         </div>
-        <span class="kbd-pill"><i class="fa fa-wand-magic-sparkles"></i> Saved per guild</span>
+        <div class="flex items-center gap-2 flex-wrap">
+          {% if restored_form_name == 'workflow' %}
+          <span class="kbd-pill bg-amber-500/10 border-amber-400/20 text-amber-200"><i class="fa fa-rotate-left"></i> Restored unsaved values</span>
+          {% endif %}
+          <span class="kbd-pill"><i class="fa fa-wand-magic-sparkles"></i> Saved per guild</span>
+        </div>
       </div>
 
       <form method="post" action="/integrations/github/workflow_save" class="space-y-6">
@@ -458,9 +630,14 @@
               {% endif %}
             </p>
           </div>
-          {% if review_preview.total_open is defined %}
-          <span class="kbd-pill"><i class="fa fa-list-check"></i> {{ review_preview.total_open }} open {{ 'issues' if review_preview.mode == 'triage' else 'PRs' }}</span>
-          {% endif %}
+          <div class="flex items-center gap-2 flex-wrap">
+            {% if review_preview.total_open is defined %}
+            <span class="kbd-pill"><i class="fa fa-list-check"></i> {{ review_preview.total_open }} open {{ 'issues' if review_preview.mode == 'triage' else 'PRs' }}</span>
+            {% endif %}
+            {% if review_preview.repo %}
+            <button type="button" class="copy-chip" data-copy-text="{{ review_preview.repo }}" data-copy-label="Preview repo"><i class="fa fa-copy"></i> Copy repo</button>
+            {% endif %}
+          </div>
         </div>
 
         {% if review_preview.error %}
@@ -579,32 +756,38 @@
       {% endif %}
     </section>
 
-    <section id="reviewer-links" class="card p-5 xl:p-6 space-y-5">
-      <div class="flex items-start justify-between gap-4 flex-wrap">
+    <details id="reviewer-links" class="accordion-block" {% if not github_user_links %}open{% endif %}>
+      <summary class="accordion-summary">
         <div>
           <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Reviewer mapping</p>
           <h3 class="mt-2 text-xl font-semibold text-white">Link Discord people to GitHub reviewers</h3>
-          <p class="mt-2 text-sm text-slate-400 max-w-3xl">This makes personal review views and future ownership reporting more useful by aligning Discord accounts with GitHub usernames.</p>
+          <p class="mt-1 text-sm text-slate-400">Open this when you need ownership mapping for review-related commands.</p>
         </div>
-        <span class="kbd-pill"><i class="fa fa-link"></i> {{ github_user_links|length }} linked</span>
-      </div>
+        <div class="accordion-summary-meta">
+            {% if restored_form_name == 'user_link' %}
+            <span class="kbd-pill bg-amber-500/10 border-amber-400/20 text-amber-200"><i class="fa fa-rotate-left"></i> Draft restored</span>
+            {% endif %}
+          <span class="kbd-pill"><i class="fa fa-link"></i> {{ github_user_links|length }} linked</span>
+          <i class="fa fa-chevron-down accordion-chevron"></i>
+        </div>
+      </summary>
+      <div class="accordion-body space-y-5">
+        <form method="post" action="/integrations/github/user_link_save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <label class="field-stack">
+            <span class="text-xs text-slate-400">Discord user ID</span>
+              <input class="input" type="text" name="discord_user_id" value="{{ user_link_form.discord_user_id }}" placeholder="123456789012345678" required/>
+            <span class="helper-text">Paste the numeric Discord ID of the reviewer.</span>
+          </label>
+          <label class="field-stack">
+            <span class="text-xs text-slate-400">GitHub username</span>
+              <input class="input" type="text" name="github_username" value="{{ user_link_form.github_username }}" placeholder="octocat" required/>
+            <span class="helper-text">Used by review queue and personal review commands.</span>
+          </label>
+          <button class="btn-primary" type="submit"><i class="fa fa-link"></i> Save reviewer link</button>
+        </form>
 
-      <form method="post" action="/integrations/github/user_link_save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-end">
-        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <label class="field-stack">
-          <span class="text-xs text-slate-400">Discord user ID</span>
-          <input class="input" type="text" name="discord_user_id" placeholder="123456789012345678" required/>
-          <span class="helper-text">Paste the numeric Discord ID of the reviewer.</span>
-        </label>
-        <label class="field-stack">
-          <span class="text-xs text-slate-400">GitHub username</span>
-          <input class="input" type="text" name="github_username" placeholder="octocat" required/>
-          <span class="helper-text">Used by review queue and personal review commands.</span>
-        </label>
-        <button class="btn-primary" type="submit"><i class="fa fa-link"></i> Save reviewer link</button>
-      </form>
-
-      <div class="table-shell overflow-x-auto">
+        <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
@@ -617,7 +800,12 @@
             {% for row in github_user_links %}
             <tr class="table-row">
               <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ row.discord_user_id }}</td>
-              <td class="px-4 py-3 text-white font-medium">{{ row.github_username }}</td>
+              <td class="px-4 py-3 text-white font-medium">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span>{{ row.github_username }}</span>
+                  <button type="button" class="copy-chip" data-copy-text="{{ row.github_username }}" data-copy-label="GitHub username"><i class="fa fa-copy"></i> Copy</button>
+                </div>
+              </td>
               <td class="px-4 py-3">
                 <form method="post" action="/integrations/github/user_link_delete" onsubmit="return confirm('Delete this Discord to GitHub mapping?')">
                   <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
@@ -637,39 +825,46 @@
           </tbody>
         </table>
       </div>
-    </section>
+      </div>
+    </details>
 
-    <section id="subscriptions" class="card p-5 xl:p-6 space-y-5">
-      <div class="flex items-start justify-between gap-4 flex-wrap">
+    <details id="subscriptions" class="accordion-block" {% if not subscriptions %}open{% endif %}>
+      <summary class="accordion-summary">
         <div>
           <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Repository watchlist</p>
           <h3 class="mt-2 text-xl font-semibold text-white">GitHub subscriptions</h3>
-          <p class="mt-2 text-sm text-slate-400 max-w-3xl">These subscriptions drive the live event feed into Discord channels. Use reset cursor if a repo gets out of sync and you need the poller to re-seed from the latest event.</p>
+          <p class="mt-1 text-sm text-slate-400">Open this to manage which repositories broadcast events into Discord.</p>
         </div>
-        <span class="kbd-pill"><i class="fa fa-bell"></i> {{ subscriptions|length }} active</span>
-      </div>
+        <div class="accordion-summary-meta">
+          {% if restored_form_name == 'subscription' %}
+          <span class="kbd-pill bg-amber-500/10 border-amber-400/20 text-amber-200"><i class="fa fa-rotate-left"></i> Draft restored</span>
+          {% endif %}
+          <span class="kbd-pill"><i class="fa fa-bell"></i> {{ subscriptions|length }} active</span>
+          <i class="fa fa-chevron-down accordion-chevron"></i>
+        </div>
+      </summary>
+      <div class="accordion-body space-y-5">
+        <form method="post" action="/integrations/github/save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <label class="field-stack xl:col-span-2">
+            <span class="text-xs text-slate-400">Repository</span>
+            <input class="input" type="text" name="repo" value="{{ subscription_form.repo }}" placeholder="owner/repo" required/>
+            <span class="helper-text">The repo to watch for pushes, PRs, issues, and releases.</span>
+          </label>
+          <label class="field-stack">
+            <span class="text-xs text-slate-400">Channel ID</span>
+            <input class="input" type="number" name="channel_id" value="{{ subscription_form.channel_id }}" placeholder="123456789012345678" required/>
+            <span class="helper-text">Discord channel receiving the updates.</span>
+          </label>
+          <label class="field-stack xl:col-span-2">
+            <span class="text-xs text-slate-400">Events</span>
+            <input class="input" type="text" name="events" value="{{ subscription_form.events }}" placeholder="push,pull_request,issues,release" required/>
+            <span class="helper-text">Comma-separated GitHub event families to include.</span>
+          </label>
+          <button class="btn-primary xl:col-span-5 xl:justify-center" type="submit"><i class="fa fa-plus"></i> Save subscription</button>
+        </form>
 
-      <form method="post" action="/integrations/github/save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
-        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <label class="field-stack xl:col-span-2">
-          <span class="text-xs text-slate-400">Repository</span>
-          <input class="input" type="text" name="repo" placeholder="owner/repo" required/>
-          <span class="helper-text">The repo to watch for pushes, PRs, issues, and releases.</span>
-        </label>
-        <label class="field-stack">
-          <span class="text-xs text-slate-400">Channel ID</span>
-          <input class="input" type="number" name="channel_id" placeholder="123456789012345678" required/>
-          <span class="helper-text">Discord channel receiving the updates.</span>
-        </label>
-        <label class="field-stack xl:col-span-2">
-          <span class="text-xs text-slate-400">Events</span>
-          <input class="input" type="text" name="events" value="push,pull_request,issues,release" placeholder="push,pull_request,issues,release" required/>
-          <span class="helper-text">Comma-separated GitHub event families to include.</span>
-        </label>
-        <button class="btn-primary xl:col-span-5 xl:justify-center" type="submit"><i class="fa fa-plus"></i> Save subscription</button>
-      </form>
-
-      <div class="table-shell overflow-x-auto">
+        <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
             <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
@@ -683,8 +878,18 @@
           <tbody>
             {% for row in subscriptions %}
             <tr class="table-row">
-              <td class="px-4 py-3 text-white font-medium">{{ row.repo }}</td>
-              <td class="px-4 py-3 text-slate-300 font-mono text-xs">{{ row.channel_id }}</td>
+              <td class="px-4 py-3 text-white font-medium">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span>{{ row.repo }}</span>
+                  <button type="button" class="copy-chip" data-copy-text="{{ row.repo }}" data-copy-label="Repository"><i class="fa fa-copy"></i> Copy</button>
+                </div>
+              </td>
+              <td class="px-4 py-3 text-slate-300 font-mono text-xs">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span>{{ row.channel_id }}</span>
+                  <button type="button" class="copy-chip" data-copy-text="{{ row.channel_id }}" data-copy-label="Channel ID"><i class="fa fa-copy"></i> Copy</button>
+                </div>
+              </td>
               <td class="px-4 py-3 text-slate-400 text-xs break-all">{{ row.events }}</td>
               <td class="px-4 py-3 text-slate-500 text-xs">{{ row.created_at[:16] if row.created_at else '—' }}</td>
               <td class="px-4 py-3">
@@ -713,18 +918,22 @@
           </tbody>
         </table>
       </div>
-    </section>
+      </div>
+    </details>
 
-    <section id="poll-state" class="card p-5 xl:p-6 space-y-5">
-      <div class="flex items-start justify-between gap-4 flex-wrap">
+    <details id="poll-state" class="accordion-block">
+      <summary class="accordion-summary">
         <div>
           <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Poller health</p>
           <h3 class="mt-2 text-xl font-semibold text-white">Saved poll state</h3>
-          <p class="mt-2 text-sm text-slate-400 max-w-3xl">These rows are the cursor and cache markers used by the GitHub poller. They usually require no action unless a repo has to be resynced.</p>
+          <p class="mt-1 text-sm text-slate-400">Open this for troubleshooting or cursor resets when a repo needs to resync.</p>
         </div>
-        <span class="kbd-pill"><i class="fa fa-wave-square"></i> {{ poll_state|length }} rows</span>
-      </div>
-
+        <div class="accordion-summary-meta">
+          <span class="kbd-pill"><i class="fa fa-wave-square"></i> {{ poll_state|length }} rows</span>
+          <i class="fa fa-chevron-down accordion-chevron"></i>
+        </div>
+      </summary>
+      <div class="accordion-body">
       <div class="table-shell overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
@@ -739,7 +948,12 @@
           <tbody>
             {% for row in poll_state %}
             <tr class="table-row">
-              <td class="px-4 py-3 text-white font-medium">{{ row.repo }}</td>
+              <td class="px-4 py-3 text-white font-medium">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span>{{ row.repo }}</span>
+                  <button type="button" class="copy-chip" data-copy-text="{{ row.repo }}" data-copy-label="Repository"><i class="fa fa-copy"></i> Copy</button>
+                </div>
+              </td>
               <td class="px-4 py-3 text-slate-300">{{ row.event_type }}</td>
               <td class="px-4 py-3 text-slate-400 font-mono text-xs">{{ row.last_id or '—' }}</td>
               <td class="px-4 py-3 text-slate-500 text-xs">{{ row.updated_at[:16] if row.updated_at else '—' }}</td>
@@ -762,7 +976,8 @@
           </tbody>
         </table>
       </div>
-    </section>
+      </div>
+    </details>
 
     {% endif %}
   </div>
