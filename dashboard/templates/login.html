@@ -14,7 +14,7 @@
         <i class="fa-brands fa-discord text-white text-3xl"></i>
       </div>
       <h1 class="text-2xl font-bold text-white">Bot Dashboard</h1>
-      <p class="text-gray-400 text-sm mt-1">Sign in to manage your bot</p>
+      <p class="text-gray-400 text-sm mt-1">Sign in with Discord to manage the servers you administer</p>
     </div>
 
     {% if error %}
@@ -23,23 +23,20 @@
     </div>
     {% endif %}
 
-    <form method="post" action="/login" class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
-      <div>
-        <label class="block text-sm font-medium text-gray-300 mb-1">Dashboard Password</label>
-        <input
-          type="password"
-          name="password"
-          autofocus
-          placeholder="Enter your password"
-          style="display:block;width:100%;background:#1f2937;border:1px solid #374151;color:#fff;font-size:0.875rem;border-radius:0.5rem;padding:0.5rem 0.75rem;outline:none;box-sizing:border-box;"
-        />
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+      {% if oauth_ready %}
+      <a href="{{ discord_login_url }}" style="display:flex;width:100%;align-items:center;justify-content:center;gap:0.5rem;padding:0.75rem 1rem;background:#5865F2;color:#fff;font-size:0.875rem;font-weight:600;border-radius:0.5rem;border:none;cursor:pointer;text-decoration:none;">
+        <i class="fa-brands fa-discord"></i> Continue With Discord
+      </a>
+      <p class="text-xs text-gray-500 leading-5">
+        Server admins only see dashboards for guilds they manage. The configured bot owner{% if bot_owner_discord_id %} ({{ bot_owner_discord_id }}){% endif %} can access every guild dashboard.
+      </p>
+      {% else %}
+      <div class="rounded-lg border border-amber-700/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+        Discord OAuth is not configured yet. Set <strong>DISCORD_CLIENT_ID</strong>, <strong>DISCORD_CLIENT_SECRET</strong>, <strong>DISCORD_REDIRECT_URI</strong>, and <strong>BOT_OWNER_DISCORD_ID</strong> in your environment.
       </div>
-      <button type="submit" style="display:flex;width:100%;align-items:center;justify-content:center;gap:0.5rem;padding:0.625rem 1rem;background:#5865F2;color:#fff;font-size:0.875rem;font-weight:600;border-radius:0.5rem;border:none;cursor:pointer;">
-        <i class="fa fa-arrow-right-to-bracket"></i> Sign In
-      </button>
-    </form>
-
-    <p class="text-center text-xs text-gray-600 mt-4">Set <code class="text-gray-500">DASHBOARD_SECRET</code> in your <code class="text-gray-500">.env</code> file.</p>
+      {% endif %}
+    </div>
   </div>
 </body>
 </html>

@@ -8,6 +8,14 @@ import dashboard.app as dashboard_app
 
 
 class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _session(guild_ids: list[int] | None = None, user_id: int = 1001) -> dict:
+        return {
+            "authenticated": True,
+            "discord_user_id": user_id,
+            "guild_access_ids": guild_ids or [],
+        }
+
     async def asyncSetUp(self) -> None:
         self._original_db_path = dashboard_app.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -54,7 +62,7 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
             ("owner/repo", "events", "evt_1", 'W/"etag"'),
         )
 
-        request = SimpleNamespace(session={"authenticated": True})
+        request = SimpleNamespace(session=self._session([1]))
         response = await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
 
         self.assertEqual(response.status_code, 302)
@@ -66,12 +74,25 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(row)
 
     async def test_reset_route_rejects_repo_not_in_guild(self) -> None:
-        request = SimpleNamespace(session={"authenticated": True})
+        request = SimpleNamespace(session=self._session([1]))
 
         with self.assertRaises(dashboard_app.HTTPException) as exc:
             await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
 
         self.assertEqual(exc.exception.status_code, 404)
+
+    async def test_reset_route_rejects_user_without_guild_access(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO github_subscriptions (guild_id, channel_id, repo, events, added_by) VALUES (?, ?, ?, ?, ?)",
+            (1, 10, "owner/repo", "push", 0),
+        )
+
+        request = SimpleNamespace(session=self._session([2]))
+
+        with self.assertRaises(dashboard_app.HTTPException) as exc:
+            await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
+
+        self.assertEqual(exc.exception.status_code, 403)
 
 
 if __name__ == "__main__":

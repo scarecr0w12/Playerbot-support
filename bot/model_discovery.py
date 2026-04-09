@@ -21,6 +21,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_MODEL_ALIAS_OVERRIDES: dict[str, str] = {
+    "qwen35": "qwen3.5",
+    "qwen35397b": "qwen3.5",
+    "qwen35397binstruct": "qwen3.5",
+    "qwen3397b": "qwen3.5",
+    "qwen3.5397b": "qwen3.5",
+    "qwen3.5397binstruct": "qwen3.5",
+    "qwen3embedding8b": "qwen3-embedding-8b",
+    "embeddinggemma": "embeddinggemma",
+}
+
 
 @dataclass
 class ModelInfo:
@@ -86,6 +97,120 @@ class ModelDiscoveryService:
             fallback_models = self._get_fallback_models(model_type)
             logger.info(f"Using {len(fallback_models)} fallback {model_type} models")
             return fallback_models
+
+    async def resolve_model_id(self, requested_model: str, model_type: str = "chat") -> str:
+        """Resolve a configured model string to a currently available model ID."""
+        models = await self.get_available_models(model_type)
+        if not models:
+            return requested_model
+
+        default_model = self.select_default_model_id(models, model_type)
+        requested = (requested_model or "").strip()
+        if not requested:
+            return default_model
+
+        exact_matches = {model.id.lower(): model.id for model in models}
+        if requested.lower() in exact_matches:
+            return exact_matches[requested.lower()]
+
+        model_lookup: dict[str, str] = {}
+        for model in models:
+            for candidate in self._model_lookup_keys(model.id):
+                model_lookup.setdefault(candidate, model.id)
+            for candidate in self._model_lookup_keys(model.name):
+                model_lookup.setdefault(candidate, model.id)
+
+        for candidate in self._model_lookup_keys(requested):
+            if candidate in model_lookup:
+                return model_lookup[candidate]
+
+        requested_key = self._normalize_lookup_key(requested)
+        for model in models:
+            if requested_key and requested_key in self._normalize_lookup_key(model.id):
+                return model.id
+            if requested_key and requested_key in self._normalize_lookup_key(model.name):
+                return model.id
+
+        logger.warning(
+            "Configured %s model %r is unavailable at %s; falling back to %s",
+            model_type,
+            requested_model,
+            self.base_url,
+            default_model,
+        )
+        return default_model
+
+    def select_default_model_id(self, models: List[ModelInfo], model_type: str) -> str:
+        """Choose a sensible default model from currently available models."""
+        if not models:
+            return ""
+
+        preferred_ids = {
+            "chat": [
+                "qwen3.5",
+                "qwen3-30b-instruct",
+                "qwen",
+                "gpt-4o",
+                "gpt-4-turbo",
+                "gpt-4",
+                "gpt-3.5-turbo",
+            ],
+            "embedding": [
+                "qwen3-embedding-8b",
+                "embeddinggemma",
+                "text-embedding-3-small",
+                "text-embedding-3-large",
+                "text-embedding-ada-002",
+            ],
+            "image": [
+                "dall-e-3",
+                "flux-1-dev",
+                "stable-diffusion",
+            ],
+        }
+
+        available = {model.id.lower(): model.id for model in models}
+        for preferred in preferred_ids.get(model_type, []):
+            if preferred.lower() in available:
+                return available[preferred.lower()]
+
+        if model_type == "chat":
+            for model in models:
+                model_id = model.id.lower()
+                if "embedding" in model_id or "image" in model_id or "vision" in model_id:
+                    continue
+                if any(token in model_id for token in ("instruct", "chat", "assistant")):
+                    return model.id
+            for model in models:
+                model_id = model.id.lower()
+                if any(token in model_id for token in ("thinking", "reasoning", "coder")):
+                    continue
+                return model.id
+
+        return models[0].id
+
+    def _normalize_lookup_key(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+    def _model_lookup_keys(self, value: str) -> List[str]:
+        normalized = self._normalize_lookup_key(value)
+        if not normalized:
+            return []
+
+        keys = {normalized}
+        if normalized in _MODEL_ALIAS_OVERRIDES:
+            keys.add(self._normalize_lookup_key(_MODEL_ALIAS_OVERRIDES[normalized]))
+
+        for alias, target in _MODEL_ALIAS_OVERRIDES.items():
+            if target == value or self._normalize_lookup_key(target) == normalized:
+                keys.add(alias)
+
+        if normalized.endswith("instruct"):
+            keys.add(normalized.removesuffix("instruct"))
+        if normalized.endswith("chat"):
+            keys.add(normalized.removesuffix("chat"))
+
+        return [key for key in keys if key]
     
     def _detect_provider(self) -> str:
         """Detect the LLM provider based on base URL."""
@@ -333,6 +458,7 @@ class ModelDiscoveryService:
             r"embed-",
             r"sentence-",
             r"embedding-",
+            r"embeddinggemma",
             r"e5-",
             r"bge-",
             r"all-MiniLM",
@@ -352,6 +478,7 @@ class ModelDiscoveryService:
         # Explicit chat patterns - these ARE chat models
         chat_patterns = [
             r"gpt-",
+            r"gpt-oss",
             r"claude-",
             r"llama-",
             r"mistral-",
@@ -359,8 +486,17 @@ class ModelDiscoveryService:
             r"gemini-",
             r"command-",
             r"qwen-",
+            r"qwen\d",
+            r"\bqwen\b",
             r"yi-",
             r"deepseek-",
+            r"\bgemma\d*\b",
+            r"\bglm\b",
+            r"\bkimi\b",
+            r"\bminimax\b",
+            r"\bsonar\b",
+            r"\bcoder\b",
+            r"\breasoning\b",
             r"chat-",
             r"instruct",
             r"turbo",
@@ -395,6 +531,7 @@ class ModelDiscoveryService:
             r"embed-",
             r"sentence-",
             r"embedding-",
+            r"embeddinggemma",
             r"e5-",
             r"bge-",
             r"all-MiniLM",
@@ -441,15 +578,19 @@ class ModelDiscoveryService:
         """Format model ID into a readable name."""
         # Replace common abbreviations and separators
         name = model_id.replace("-", " ").replace("_", " ")
+        name = name.replace(".", ". ")
         name = re.sub(r"(\d+)", r" \1", name)  # Add space before numbers
         name = " ".join(word.capitalize() for word in name.split())
         
         # Handle special cases
         name = name.replace("Gpt", "GPT")
+        name = name.replace("Oss", "OSS")
         name = name.replace("Claude", "Claude")
         name = name.replace("Llama", "Llama")
         name = name.replace("Mistral", "Mistral")
         name = name.replace("Mixtral", "Mixtral")
+        name = name.replace("Qwen", "Qwen")
+        name = name.replace("Glm", "GLM")
         
         return name
     

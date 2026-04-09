@@ -3,13 +3,21 @@ from __future__ import annotations
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import dashboard.app as dashboard_app
 from bot.database import _SCHEMA as BOT_SCHEMA
 
 
 class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _session(guild_ids: list[int] | None = None, user_id: int = 1001) -> dict:
+        return {
+            "authenticated": True,
+            "discord_user_id": user_id,
+            "guild_access_ids": guild_ids or [],
+        }
+
     async def asyncSetUp(self) -> None:
         self._original_db_path = dashboard_app.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -187,7 +195,7 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
         original_repair = dashboard_app.repair_legacy_crawl_metadata
         dashboard_app.repair_legacy_crawl_metadata = fake_repair
         try:
-            request = SimpleNamespace(session={"authenticated": True})
+            request = SimpleNamespace(session=self._session([1]))
             response = await dashboard_app.knowledge_repair_crawl_metadata(request, guild_id=1)
         finally:
             dashboard_app.repair_legacy_crawl_metadata = original_repair
@@ -238,7 +246,7 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
         original_clear = dashboard_app.clear_knowledge_base
         dashboard_app.clear_knowledge_base = fake_clear
         try:
-            request = SimpleNamespace(session={"authenticated": True})
+            request = SimpleNamespace(session=self._session([1]))
             response = await dashboard_app.knowledge_reset(request, guild_id=1)
         finally:
             dashboard_app.clear_knowledge_base = original_clear
@@ -322,6 +330,7 @@ class DashboardKnowledgeLegacySchemaTests(unittest.IsolatedAsyncioTestCase):
             1,
             "2026-04-08 12:00:00",
         )
+
         await dashboard_app.upsert_crawl_source(
             1,
             "https://docs.example.com/start",
@@ -338,6 +347,75 @@ class DashboardKnowledgeLegacySchemaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source_rows[0]["title"], "Docs Start Updated")
         self.assertEqual(source_rows[0]["chunk_count"], 2)
         self.assertEqual(source_rows[0]["crawled_at"], "2026-04-08 12:05:00")
+
+
+class DashboardLearnedFactsSyncTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _session(guild_ids: list[int] | None = None, user_id: int = 1001) -> dict:
+        return {
+            "authenticated": True,
+            "discord_user_id": user_id,
+            "guild_access_ids": guild_ids or [],
+        }
+
+    async def asyncSetUp(self) -> None:
+        self._original_db_path = dashboard_app.DB_PATH
+        self._tmpdir = tempfile.TemporaryDirectory()
+        dashboard_app.DB_PATH = f"{self._tmpdir.name}/facts.db"
+
+        await dashboard_app.db_execute(
+            """
+            CREATE TABLE IF NOT EXISTS learned_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                fact TEXT NOT NULL,
+                embedding BLOB,
+                model TEXT,
+                qdrant_id TEXT,
+                source TEXT NOT NULL DEFAULT 'conversation',
+                confidence REAL NOT NULL DEFAULT 1.0,
+                approved INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(guild_id, fact)
+            )
+            """
+        )
+
+    async def asyncTearDown(self) -> None:
+        dashboard_app.DB_PATH = self._original_db_path
+        self._tmpdir.cleanup()
+
+    async def test_toggle_fact_updates_qdrant_payload(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO learned_facts (guild_id, fact, qdrant_id, source, approved) VALUES (?, ?, ?, ?, ?)",
+            (1, "The support queue is triaged by moderators.", "fact-1", "conversation", 0),
+        )
+
+        fake_qdrant = SimpleNamespace(set_fact_approved=AsyncMock())
+        with patch("bot.qdrant_service.QdrantService", return_value=fake_qdrant):
+            request = SimpleNamespace(session=self._session([1]))
+            response = await dashboard_app.knowledge_toggle_fact(request, fact_id=1, guild_id=1, approved=1)
+
+        self.assertEqual(response.status_code, 302)
+        fake_qdrant.set_fact_approved.assert_awaited_once_with(1, "fact-1", 1)
+        row = await dashboard_app.db_fetchone("SELECT approved FROM learned_facts WHERE id = ?", (1,))
+        self.assertEqual(row["approved"], 1)
+
+    async def test_delete_fact_removes_qdrant_point(self) -> None:
+        await dashboard_app.db_execute(
+            "INSERT INTO learned_facts (guild_id, fact, qdrant_id, source, approved) VALUES (?, ?, ?, ?, ?)",
+            (1, "The support queue is triaged by moderators.", "fact-1", "conversation", 0),
+        )
+
+        fake_qdrant = SimpleNamespace(delete_fact=AsyncMock())
+        with patch("bot.qdrant_service.QdrantService", return_value=fake_qdrant):
+            request = SimpleNamespace(session=self._session([1]))
+            response = await dashboard_app.knowledge_delete_fact(request, fact_id=1, guild_id=1)
+
+        self.assertEqual(response.status_code, 302)
+        fake_qdrant.delete_fact.assert_awaited_once_with(1, "fact-1")
+        row = await dashboard_app.db_fetchone("SELECT COUNT(*) AS c FROM learned_facts WHERE id = ?", (1,))
+        self.assertEqual(row["c"], 0)
 
 
 class DashboardGuildListingTests(unittest.IsolatedAsyncioTestCase):

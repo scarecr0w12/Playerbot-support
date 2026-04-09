@@ -276,9 +276,12 @@ LLM_MODEL=llama3
 1. Create an application at [discord.com/developers](https://discord.com/developers/applications).
 2. **Bot** tab → enable **Message Content Intent** and **Server Members Intent**.
 3. Copy the bot token into `.env`.
-4. **OAuth2 → URL Generator** → scopes: `bot`, `applications.commands`.
-5. Permissions: `Administrator` (or fine-grained: Send Messages, Manage Channels, Manage Roles, Kick/Ban Members, Moderate Members, Embed Links, Attach Files, Read Message History, Use Slash Commands).
-6. Invite the bot with the generated URL.
+4. **OAuth2 → General** → copy the application **Client ID** and **Client Secret** into `.env` as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`.
+5. **OAuth2 → Redirects** → add your dashboard callback URL, for example `http://localhost:8000/auth/discord/callback`, and set the same value in `DISCORD_REDIRECT_URI`.
+6. Set `BOT_OWNER_DISCORD_ID` to the Discord user ID that should act as the master dashboard account. That account can access every guild dashboard; other users only see guilds where they are owner or have `Manage Server`.
+7. **OAuth2 → URL Generator** → scopes: `bot`, `applications.commands`.
+8. Permissions: `Administrator` (or fine-grained: Send Messages, Manage Channels, Manage Roles, Kick/Ban Members, Moderate Members, Embed Links, Attach Files, Read Message History, Use Slash Commands).
+9. Invite the bot with the generated URL.
 
 ### 5. Run
 
@@ -289,6 +292,8 @@ python main.py
 Slash commands sync on startup (may take ~1 minute to appear in Discord).
 
 > **Note:** The FastAPI dashboard is started from inside `main.py` and does **not** hot-reload. If you change dashboard routes, templates, or static assets, restart `python main.py` to pick up the update.
+
+> **Dashboard auth:** Dashboard login uses Discord OAuth. If the OAuth environment variables are missing, the login page will stay disabled until they are configured.
 
 ### 6. Migrate Existing Knowledge Base (first run only)
 

@@ -327,6 +327,7 @@ CREATE TABLE IF NOT EXISTS learned_facts (
     fact        TEXT    NOT NULL,
     embedding   BLOB,                   -- serialised float list (same format as embeddings)
     model       TEXT,
+    qdrant_id   TEXT,
     source      TEXT    NOT NULL DEFAULT 'conversation',  -- conversation | training | qa_pair
     confidence  REAL    NOT NULL DEFAULT 1.0,
     approved    INTEGER NOT NULL DEFAULT 1,               -- 1 = active, 0 = hidden
@@ -397,6 +398,7 @@ class Database:
                 fact        TEXT    NOT NULL,
                 embedding   BLOB,
                 model       TEXT,
+                qdrant_id   TEXT,
                 source      TEXT    NOT NULL DEFAULT 'conversation',
                 confidence  REAL    NOT NULL DEFAULT 1.0,
                 approved    INTEGER NOT NULL DEFAULT 1,
@@ -417,6 +419,12 @@ class Database:
         try:
             await self._db.execute(  # type: ignore[union-attr]
                 "ALTER TABLE learned_facts ADD COLUMN model TEXT"
+            )
+        except Exception:
+            pass
+        try:
+            await self._db.execute(  # type: ignore[union-attr]
+                "ALTER TABLE learned_facts ADD COLUMN qdrant_id TEXT"
             )
         except Exception:
             pass
@@ -1680,20 +1688,29 @@ class Database:
         fact: str,
         embedding: bytes | None,
         model: str | None,
+        qdrant_id: str | None = None,
         source: str = "conversation",
         confidence: float = 1.0,
+        approved: bool = True,
     ) -> bool:
         """Insert a fact; silently ignore duplicates. Returns True if inserted."""
         try:
             await self.conn.execute(
-                "INSERT INTO learned_facts (guild_id, fact, embedding, model, source, confidence) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (guild_id, fact, embedding, model, source, confidence),
+                "INSERT INTO learned_facts (guild_id, fact, embedding, model, qdrant_id, source, confidence, approved) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (guild_id, fact, embedding, model, qdrant_id, source, confidence, int(approved)),
             )
             await self.conn.commit()
             return True
         except aiosqlite.IntegrityError:
             return False
+
+    async def get_learned_fact(self, guild_id: int, fact_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM learned_facts WHERE guild_id = ? AND id = ?",
+            (guild_id, fact_id),
+        )
+        return await cur.fetchone()
 
     async def get_learned_facts(self, guild_id: int, approved_only: bool = True):
         if approved_only:

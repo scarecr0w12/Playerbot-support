@@ -18,6 +18,28 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _message_content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if isinstance(text, str):
+                    parts.append(text)
+                    continue
+                if item.get("type") == "text" and isinstance(item.get("value"), str):
+                    parts.append(item["value"])
+        return "\n".join(part.strip() for part in parts if part and part.strip())
+    return str(content)
+
 _FACT_ALLOWED_CATEGORIES = {
     "user_preference",
     "user_identity",
@@ -236,6 +258,7 @@ class LLMService:
             base_url=config.llm_base_url,
             api_key=config.llm_api_key,
         )
+        self._tool_support_by_model: dict[str, bool] = {}
 
     @staticmethod
     def _normalize_fact_category(category: Any) -> str:
@@ -296,6 +319,7 @@ class LLMService:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         tools: list[dict] | None = None,
+        allow_tools: bool = True,
         max_tool_rounds: int = 5,
     ) -> dict[str, Any]:
         """Send a chat completion request and handle tool calls.
@@ -317,8 +341,14 @@ class LLMService:
             *conversation_history,
         ]
 
-        all_tools = list(BUILTIN_TOOLS)
-        if tools:
+        tool_support = getattr(self, "_tool_support_by_model", None)
+        if tool_support is None:
+            tool_support = {}
+            self._tool_support_by_model = tool_support
+        tools_allowed_for_model = allow_tools and tool_support.get(mdl, True)
+
+        all_tools = list(BUILTIN_TOOLS) if tools_allowed_for_model else []
+        if tools and tools_allowed_for_model:
             all_tools.extend(tools)
 
         total_prompt_tokens = 0
@@ -336,15 +366,36 @@ class LLMService:
                 kwargs["tools"] = all_tools
                 kwargs["tool_choice"] = "auto"
 
+            retried_without_tools = False
             try:
                 response = await self._client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
             except Exception:
-                logger.exception("LLM request failed")
-                return {
-                    "content": "⚠️ Something went wrong while contacting the language model.",
-                    "embeds": [],
-                    "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
-                }
+                if kwargs.get("tools"):
+                    tool_support[mdl] = False
+                    logger.warning("LLM request with tools failed for model %s; retrying without tools", mdl, exc_info=True)
+                    try:
+                        retry_kwargs = dict(kwargs)
+                        retry_kwargs.pop("tools", None)
+                        retry_kwargs.pop("tool_choice", None)
+                        retried_without_tools = True
+                        response = await self._client.chat.completions.create(**retry_kwargs)  # type: ignore[arg-type]
+                    except Exception:
+                        logger.exception("LLM request failed after retry without tools")
+                        return {
+                            "content": "⚠️ Something went wrong while contacting the language model.",
+                            "embeds": [],
+                            "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
+                        }
+                else:
+                    logger.exception("LLM request failed")
+                    return {
+                        "content": "⚠️ Something went wrong while contacting the language model.",
+                        "embeds": [],
+                        "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
+                    }
+
+            if kwargs.get("tools") and not retried_without_tools:
+                tool_support[mdl] = True
 
             choice = response.choices[0]
             usage = response.usage
@@ -352,9 +403,11 @@ class LLMService:
                 total_prompt_tokens += usage.prompt_tokens
                 total_completion_tokens += usage.completion_tokens
 
+            tool_calls = list(getattr(choice.message, "tool_calls", None) or [])
+
             # No tool calls — return final text
-            if choice.finish_reason != "tool_calls" or not choice.message.tool_calls:
-                content = choice.message.content or ""
+            if not tool_calls:
+                content = _message_content_to_text(choice.message.content)
                 return {
                     "content": content.strip(),
                     "embeds": embeds,
@@ -364,7 +417,7 @@ class LLMService:
             # Process tool calls
             messages.append(choice.message.model_dump())  # type: ignore[arg-type]
             has_create_embed = False
-            for tc in choice.message.tool_calls:
+            for tc in tool_calls:
                 fn_name = tc.function.name
                 try:
                     fn_args = json.loads(tc.function.arguments)

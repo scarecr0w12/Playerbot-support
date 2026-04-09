@@ -53,7 +53,7 @@
                 {% endif %}
                 {{ category }} ({{ keys|length }} keys)
               </h3>
-              {% if category == "AI Assistant" %}
+              {% if category == "AI Assistant" and can_refresh_models %}
               <button type="button" onclick="refreshModels()" class="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-1" id="refresh-models-btn">
                 <i class="fa fa-refresh"></i> Refresh Models
               </button>

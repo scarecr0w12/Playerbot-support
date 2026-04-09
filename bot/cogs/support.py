@@ -26,8 +26,9 @@ if TYPE_CHECKING:
 
 from bot.qdrant_service import QdrantService
 
-from bot.config import DEFAULTS
+from bot.config import Config, DEFAULTS
 from bot.crawler import WebCrawler
+from bot.model_discovery import ModelDiscoveryService
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,7 @@ class SupportCog(commands.Cog, name="Support"):
         self.db = db
         self.llm = llm
         self.qdrant: QdrantService = qdrant or QdrantService()
+        self.model_discovery = ModelDiscoveryService(Config())
         self._processing_messages: set[int] = set()
         # Context menu: right-click message → "Ask AI about this"
         self._ask_ctx = app_commands.ContextMenu(name="Ask AI", callback=self._ask_context_menu)
@@ -260,6 +262,7 @@ class SupportCog(commands.Cog, name="Support"):
             learned_text,
             packed,
             emb_model,
+            qdrant_id=str(message.id),
             source="brain_reaction",
         )
         created_mark = await self.db.add_learned_message_mark(
@@ -360,7 +363,12 @@ class SupportCog(commands.Cog, name="Support"):
         await self.db.set_guild_config(guild_id, f"assistant_{key}", value)
 
     async def _get_model(self, guild_id: int) -> str:
-        return await self.db.get_setting(guild_id, "assistant_model")
+        model = await self.db.get_setting(guild_id, "assistant_model")
+        try:
+            return await self.model_discovery.resolve_model_id(model, "chat")
+        except Exception:
+            logger.warning("Falling back to stored assistant chat model %r", model, exc_info=True)
+            return model
 
     async def _get_temperature(self, guild_id: int) -> float:
         return await self.db.get_setting_float(guild_id, "assistant_temperature")
@@ -372,10 +380,20 @@ class SupportCog(commands.Cog, name="Support"):
         return await self.db.get_setting_int(guild_id, "assistant_max_retention")
 
     async def _get_embedding_model(self, guild_id: int) -> str:
-        return await self.db.get_setting(guild_id, "assistant_embedding_model")
+        model = await self.db.get_setting(guild_id, "assistant_embedding_model")
+        try:
+            return await self.model_discovery.resolve_model_id(model, "embedding")
+        except Exception:
+            logger.warning("Falling back to stored assistant embedding model %r", model, exc_info=True)
+            return model
 
     async def _get_image_model(self, guild_id: int) -> str:
-        return await self.db.get_setting(guild_id, "assistant_image_model")
+        model = await self.db.get_setting(guild_id, "assistant_image_model")
+        try:
+            return await self.model_discovery.resolve_model_id(model, "image")
+        except Exception:
+            logger.warning("Falling back to stored assistant image model %r", model, exc_info=True)
+            return model
 
     async def _is_enabled(self, guild_id: int) -> bool:
         val = await self.db.get_guild_config(guild_id, "assistant_enabled")
@@ -447,19 +465,34 @@ class SupportCog(commands.Cog, name="Support"):
                 user_message, assistant_reply, model=model
             )
             for fact in facts:
+                point_id = None
                 try:
                     vec, _ = await self.llm.create_embedding(fact, model=emb_model)
                 except Exception:
                     vec = None
-                # Keep metadata in SQLite
-                await self.db.add_learned_fact(
-                    guild_id, fact, None, emb_model, source="conversation"
-                )
-                # Store vector in Qdrant
                 if vec:
                     import uuid as _uuid
                     point_id = str(_uuid.uuid4())
-                    await self.qdrant.upsert_fact(guild_id, point_id, vec, fact, source="conversation")
+                # Keep metadata in SQLite
+                await self.db.add_learned_fact(
+                    guild_id,
+                    fact,
+                    None,
+                    emb_model,
+                    qdrant_id=point_id,
+                    source="conversation",
+                    approved=False,
+                )
+                # Store vector in Qdrant
+                if vec and point_id:
+                    await self.qdrant.upsert_fact(
+                        guild_id,
+                        point_id,
+                        vec,
+                        fact,
+                        source="conversation",
+                        approved=0,
+                    )
             if facts:
                 logger.debug("Learned %d fact(s) for guild %d", len(facts), guild_id)
         except Exception:
@@ -497,9 +530,9 @@ class SupportCog(commands.Cog, name="Support"):
             system_prompt += "\n\n" + rag_ctx
 
         # Function calling tools
+        function_calling_enabled = bool(guild and await self._function_calling_enabled(guild_id))
         tools = None
-        if guild and await self._function_calling_enabled(guild_id):
-            from bot.llm_service import BUILTIN_TOOLS
+        if function_calling_enabled:
             custom_fns = await self.db.get_enabled_functions(guild_id)
             tools_list: list[dict] = []
             for fn in custom_fns:
@@ -526,6 +559,7 @@ class SupportCog(commands.Cog, name="Support"):
             temperature=temperature,
             max_tokens=max_tokens,
             tools=tools,
+            allow_tools=function_calling_enabled,
         )
 
         # Store assistant reply
@@ -1563,15 +1597,23 @@ class SupportCog(commands.Cog, name="Support"):
     @train_group.command(name="delete", description="Delete a learned fact by its ID")
     @app_commands.describe(fact_id="The ID shown in /train list")
     async def train_delete(self, interaction: discord.Interaction, fact_id: int) -> None:
-        ok = await self.db.delete_learned_fact(interaction.guild.id, fact_id)  # type: ignore[union-attr]
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        row = await self.db.get_learned_fact(guild_id, fact_id)
+        ok = await self.db.delete_learned_fact(guild_id, fact_id)
+        if ok and row and row["qdrant_id"]:
+            await self.qdrant.delete_fact(guild_id, row["qdrant_id"])
         msg = f"🗑️ Fact `#{fact_id}` deleted." if ok else f"No fact with ID `#{fact_id}` found."
         await interaction.response.send_message(msg, ephemeral=True)
 
     @train_group.command(name="approve", description="Approve or hide a learned fact by ID")
     @app_commands.describe(fact_id="The fact ID", approved="True to approve, False to hide")
     async def train_approve(self, interaction: discord.Interaction, fact_id: int, approved: bool) -> None:
-        ok = await self.db.set_fact_approval(interaction.guild.id, fact_id, approved)  # type: ignore[union-attr]
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        row = await self.db.get_learned_fact(guild_id, fact_id)
+        ok = await self.db.set_fact_approval(guild_id, fact_id, approved)
         if ok:
+            if row and row["qdrant_id"]:
+                await self.qdrant.set_fact_approved(guild_id, row["qdrant_id"], int(approved))
             status = "approved ✅" if approved else "hidden ❌"
             await interaction.response.send_message(f"Fact `#{fact_id}` is now **{status}**.", ephemeral=True)
         else:
@@ -1579,7 +1621,9 @@ class SupportCog(commands.Cog, name="Support"):
 
     @train_group.command(name="reset", description="Delete ALL learned facts for this server")
     async def train_reset(self, interaction: discord.Interaction) -> None:
-        count = await self.db.reset_learned_facts(interaction.guild.id)  # type: ignore[union-attr]
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        count = await self.db.reset_learned_facts(guild_id)
+        await self.qdrant.reset_facts(guild_id)
         await interaction.response.send_message(f"🗑️ Deleted {count} learned fact(s).", ephemeral=True)
 
     # ==================================================================

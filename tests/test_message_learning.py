@@ -89,6 +89,7 @@ class MessageLearningSupportTests(unittest.IsolatedAsyncioTestCase):
             "The support channel is monitored by moderators.",
             b"packed",
             "embed-model",
+            qdrant_id="555",
             source="brain_reaction",
         )
         db.add_learned_message_mark.assert_awaited_once_with(42, 99, 555, 77, 88)
@@ -158,6 +159,46 @@ class MessageLearningSupportTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(status, "already_marked")
         self.assertFalse(db.add_learned_fact.called)
+
+    async def test_exchange_learning_stores_new_facts_pending_review(self) -> None:
+        db = MagicMock()
+        db.add_learned_fact = AsyncMock(return_value=True)
+
+        llm = MagicMock()
+        llm.extract_facts = AsyncMock(return_value=["The support queue is triaged by moderators."])
+        llm.create_embedding = AsyncMock(return_value=([0.1, 0.2], b"packed"))
+
+        qdrant = MagicMock()
+        qdrant.upsert_fact = AsyncMock()
+
+        bot = MagicMock()
+        bot.tree = MagicMock()
+        bot.tree.add_command = MagicMock()
+
+        cog = SupportCog(bot=bot, db=db, llm=llm, qdrant=qdrant)
+
+        await cog._learn_from_exchange(
+            42,
+            "Who handles the support queue?",
+            "The support queue is triaged by moderators.",
+            "chat-model",
+            "embed-model",
+        )
+
+        db.add_learned_fact.assert_awaited_once()
+        args = db.add_learned_fact.await_args
+        self.assertEqual(args.args[:4], (42, "The support queue is triaged by moderators.", None, "embed-model"))
+        self.assertEqual(args.kwargs["source"], "conversation")
+        self.assertFalse(args.kwargs["approved"])
+        self.assertIsNotNone(args.kwargs["qdrant_id"])
+
+        qdrant.upsert_fact.assert_awaited_once()
+        qdrant_args = qdrant.upsert_fact.await_args
+        self.assertEqual(qdrant_args.args[0], 42)
+        self.assertEqual(qdrant_args.args[2], [0.1, 0.2])
+        self.assertEqual(qdrant_args.args[3], "The support queue is triaged by moderators.")
+        self.assertEqual(qdrant_args.kwargs["source"], "conversation")
+        self.assertEqual(qdrant_args.kwargs["approved"], 0)
 
 
 class FactExtractionTests(unittest.IsolatedAsyncioTestCase):

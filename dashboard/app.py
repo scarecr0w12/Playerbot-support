@@ -1,7 +1,7 @@
 """Dashboard web application for the Discord bot.
 
 Serves a web UI backed by FastAPI + Jinja2 templates.
-Authentication is handled via a secret token stored in DASHBOARD_SECRET env var.
+Authentication is handled with Discord OAuth and per-guild access control.
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ load_dotenv()
 
 import os
 import time
-import hmac
-import hashlib
 import secrets
 import logging
 import asyncio
@@ -21,10 +19,11 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlencode
 
 import aiosqlite
 import httpx
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, Form, BackgroundTasks
+from fastapi import FastAPI, Request, HTTPException, Form, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -40,8 +39,11 @@ logger = logging.getLogger("dashboard")
 # Bootstrap
 # ---------------------------------------------------------------------------
 
-DASHBOARD_SECRET = os.getenv("DASHBOARD_SECRET", "changeme")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
+DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
+DISCORD_REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI", "").strip()
+DISCORD_API_BASE = os.getenv("DISCORD_API_BASE", "https://discord.com/api/v10").rstrip("/")
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bot.db")
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -51,6 +53,22 @@ app = FastAPI(title="Bot Dashboard", docs_url=None, redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, max_age=86400)
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+
+DISCORD_OAUTH_SCOPES = ("identify", "guilds")
+DISCORD_ADMINISTRATOR_PERMISSION = 0x8
+DISCORD_MANAGE_GUILD_PERMISSION = 0x20
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+BOT_OWNER_DISCORD_ID = _safe_int(
+    os.getenv("BOT_OWNER_DISCORD_ID") or os.getenv("MASTER_DISCORD_USER_ID")
+)
 
 # Initialize dynamic config schema
 config = Config()
@@ -65,6 +83,171 @@ def _now() -> str:
 def ctx(extra: dict) -> dict:
     """Build template context with common fields (now timestamp)."""
     return {"now": _now(), **extra}
+
+
+def discord_oauth_configured() -> bool:
+    return bool(DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET and DISCORD_REDIRECT_URI)
+
+
+def build_discord_login_url(state: str) -> str:
+    query = urlencode(
+        {
+            "client_id": DISCORD_CLIENT_ID,
+            "redirect_uri": DISCORD_REDIRECT_URI,
+            "response_type": "code",
+            "scope": " ".join(DISCORD_OAUTH_SCOPES),
+            "prompt": "none",
+            "state": state,
+        }
+    )
+    return f"https://discord.com/oauth2/authorize?{query}"
+
+
+def build_login_context(request: Request, error: str | None = None) -> dict[str, Any]:
+    oauth_ready = discord_oauth_configured()
+    discord_login_url = None
+    if oauth_ready:
+        state = secrets.token_urlsafe(24)
+        request.session["discord_oauth_state"] = state
+        discord_login_url = build_discord_login_url(state)
+
+    return ctx(
+        {
+            "error": error,
+            "oauth_ready": oauth_ready,
+            "discord_login_url": discord_login_url,
+            "bot_owner_discord_id": BOT_OWNER_DISCORD_ID,
+        }
+    )
+
+
+def get_session_user_id(request: Request) -> int | None:
+    return _safe_int(request.session.get("discord_user_id"))
+
+
+def is_master_user_id(user_id: int | None) -> bool:
+    return bool(BOT_OWNER_DISCORD_ID is not None and user_id == BOT_OWNER_DISCORD_ID)
+
+
+def is_master_session(request: Request) -> bool:
+    return is_master_user_id(get_session_user_id(request))
+
+
+def get_session_guild_ids(request: Request) -> list[int]:
+    raw_ids = request.session.get("guild_access_ids") or []
+    guild_ids: list[int] = []
+    for raw_id in raw_ids:
+        guild_id = _safe_int(raw_id)
+        if guild_id is not None:
+            guild_ids.append(guild_id)
+    return guild_ids
+
+
+def is_authenticated(request: Request) -> bool:
+    return bool(request.session.get("authenticated") and get_session_user_id(request) is not None)
+
+
+def discord_avatar_url(user: dict[str, Any]) -> str | None:
+    user_id = user.get("id")
+    avatar = user.get("avatar")
+    if not user_id or not avatar:
+        return None
+    image_format = "gif" if str(avatar).startswith("a_") else "png"
+    return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.{image_format}?size=128"
+
+
+def guild_is_manageable(guild: dict[str, Any]) -> bool:
+    if guild.get("owner"):
+        return True
+    permissions = _safe_int(guild.get("permissions") or guild.get("permissions_new")) or 0
+    required_permissions = DISCORD_ADMINISTRATOR_PERMISSION | DISCORD_MANAGE_GUILD_PERMISSION
+    return bool(permissions & required_permissions)
+
+
+async def fetch_discord_oauth_token(code: str) -> str:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"{DISCORD_API_BASE}/oauth2/token",
+            data={
+                "client_id": DISCORD_CLIENT_ID,
+                "client_secret": DISCORD_CLIENT_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": DISCORD_REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    token = payload.get("access_token")
+    if not token:
+        raise HTTPException(status_code=502, detail="Discord OAuth did not return an access token")
+    return token
+
+
+async def fetch_discord_identity(access_token: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
+        user_response = await client.get(f"{DISCORD_API_BASE}/users/@me")
+        user_response.raise_for_status()
+        guilds_response = await client.get(f"{DISCORD_API_BASE}/users/@me/guilds")
+        guilds_response.raise_for_status()
+    return user_response.json(), guilds_response.json()
+
+
+async def get_accessible_guilds(request: Request) -> list[dict[str, Any]]:
+    require_auth(request)
+    guilds = await get_all_guilds()
+    if is_master_session(request):
+        return guilds
+
+    allowed_guild_ids = set(get_session_guild_ids(request))
+    return [guild for guild in guilds if _safe_int(guild.get("guild_id")) in allowed_guild_ids]
+
+
+async def get_authorized_guilds(request: Request, guild_id: int | None = None) -> list[dict[str, Any]]:
+    guilds = await get_accessible_guilds(request)
+    if guild_id is None:
+        return guilds
+
+    if is_master_session(request):
+        if guild_id not in {_safe_int(guild.get("guild_id")) for guild in guilds}:
+            guilds = [*guilds, {"guild_id": guild_id, "guild_name": f"Guild {guild_id}"}]
+        return guilds
+
+    authorized_guild_ids = set(get_session_guild_ids(request))
+    if guild_id not in authorized_guild_ids:
+        raise HTTPException(status_code=403, detail="You do not have access to this guild")
+
+    if guild_id not in {_safe_int(guild.get("guild_id")) for guild in guilds}:
+        guilds = [*guilds, {"guild_id": guild_id, "guild_name": f"Guild {guild_id}"}]
+    return guilds
+
+
+async def require_guild_access(request: Request, guild_id: int) -> None:
+    await get_authorized_guilds(request, guild_id)
+
+
+def require_master_user(request: Request) -> None:
+    require_auth(request)
+    if not is_master_session(request):
+        raise HTTPException(status_code=403, detail="Only the bot owner can perform this action")
+
+
+def build_guild_scope_clause(guild_ids: list[int], column: str = "guild_id") -> tuple[str, tuple[Any, ...]]:
+    if not guild_ids:
+        return "1 = 0", ()
+    placeholders = ", ".join("?" for _ in guild_ids)
+    return f"{column} IN ({placeholders})", tuple(guild_ids)
+
+
+async def count_scoped_rows(table: str, guild_ids: list[int], where: str | None = None, params: tuple[Any, ...] = ()) -> int:
+    scope_clause, scope_params = build_guild_scope_clause(guild_ids)
+    query = f"SELECT COUNT(*) AS c FROM {table} WHERE {scope_clause}"
+    if where:
+        query = f"{query} AND {where}"
+    row = await db_fetchone(query, scope_params + params)
+    return int(row["c"]) if row else 0
 
 
 GUILD_ID_QUERIES = [
@@ -97,23 +280,48 @@ GUILD_ID_QUERIES = [
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$")
 VALID_GITHUB_EVENTS = {"push", "pull_request", "issues", "release"}
 LEGACY_UNKNOWN_EMBEDDING_MODEL = "legacy-unknown"
+SQLITE_SOURCE_TABLE_RE = re.compile(r"FROM\s+([A-Za-z_][A-Za-z0-9_]*)", re.IGNORECASE)
 
 
 async def get_all_guilds() -> list[dict[str, Any]]:
-    guild_union = " UNION ".join(GUILD_ID_QUERIES)
-    query = f"""
-        WITH guilds AS (
-            {guild_union}
-        )
-        SELECT
-            guilds.guild_id,
-            COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id) AS guild_name
-        FROM guilds
-        LEFT JOIN guild_config AS meta
-            ON meta.guild_id = guilds.guild_id
-           AND meta.key = 'guild_name'
-        ORDER BY LOWER(COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id)), guilds.guild_id
-    """
+    table_rows = await db_fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")
+    existing_tables = {str(row["name"]) for row in table_rows}
+
+    available_queries = []
+    for query in GUILD_ID_QUERIES:
+        match = SQLITE_SOURCE_TABLE_RE.search(query)
+        if not match:
+            continue
+        if match.group(1) in existing_tables:
+            available_queries.append(query)
+
+    if not available_queries:
+        return []
+
+    guild_union = " UNION ".join(available_queries)
+    if "guild_config" in existing_tables:
+        query = f"""
+            WITH guilds AS (
+                {guild_union}
+            )
+            SELECT
+                guilds.guild_id,
+                COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id) AS guild_name
+            FROM guilds
+            LEFT JOIN guild_config AS meta
+                ON meta.guild_id = guilds.guild_id
+               AND meta.key = 'guild_name'
+            ORDER BY LOWER(COALESCE(NULLIF(TRIM(meta.value), ''), 'Guild ' || guilds.guild_id)), guilds.guild_id
+        """
+    else:
+        query = f"""
+            WITH guilds AS (
+                {guild_union}
+            )
+            SELECT guild_id, 'Guild ' || guild_id AS guild_name
+            FROM guilds
+            ORDER BY guild_id
+        """
     return await db_fetchall(query)
 
 
@@ -451,14 +659,14 @@ async def reset_github_poll_state(repo: str) -> int:
 # ---------------------------------------------------------------------------
 
 def require_auth(request: Request):
-    if not request.session.get("authenticated"):
+    if not is_authenticated(request):
         raise HTTPException(status_code=302, headers={"Location": "/login"})
     return True
 
 
 def auth_redirect(request: Request):
     """Returns redirect if not authenticated, else None."""
-    if not request.session.get("authenticated"):
+    if not is_authenticated(request):
         return RedirectResponse("/login", status_code=302)
     return None
 
@@ -469,15 +677,87 @@ def auth_redirect(request: Request):
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"error": None, "now": _now()})
+    if is_authenticated(request):
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(request, "login.html", build_login_context(request))
 
 
 @app.post("/login", response_class=HTMLResponse)
-async def login_submit(request: Request, password: str = Form(...)):
-    if hmac.compare_digest(password, DASHBOARD_SECRET):
-        request.session["authenticated"] = True
-        return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html", {"error": "Invalid password", "now": _now()})
+async def login_submit(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        build_login_context(request, "Password login is disabled. Sign in with Discord."),
+    )
+
+
+@app.get("/auth/discord/callback")
+async def discord_auth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    if error:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            build_login_context(request, f"Discord login failed: {error}"),
+        )
+    if not discord_oauth_configured():
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            build_login_context(request, "Discord OAuth is not configured on the server."),
+        )
+
+    expected_state = request.session.pop("discord_oauth_state", None)
+    if not code or not state or not expected_state or not secrets.compare_digest(state, expected_state):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            build_login_context(request, "Discord login session expired. Please try again."),
+        )
+
+    try:
+        access_token = await fetch_discord_oauth_token(code)
+        user, guilds = await fetch_discord_identity(access_token)
+    except httpx.HTTPError as exc:
+        logger.warning("Discord OAuth request failed: %s", exc)
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            build_login_context(request, "Unable to complete Discord login right now."),
+        )
+
+    user_id = _safe_int(user.get("id"))
+    if user_id is None:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            build_login_context(request, "Discord login returned an invalid user profile."),
+        )
+
+    guild_access_ids = sorted(
+        {
+            _safe_int(guild.get("id"))
+            for guild in guilds
+            if guild_is_manageable(guild) and _safe_int(guild.get("id")) is not None
+        }
+    )
+
+    request.session.clear()
+    request.session.update(
+        {
+            "authenticated": True,
+            "authenticated_at": int(time.time()),
+            "discord_user_id": user_id,
+            "guild_access_ids": guild_access_ids,
+            "user": {
+                "id": str(user_id),
+                "username": user.get("username") or "Discord User",
+                "global_name": user.get("global_name"),
+                "avatar_url": discord_avatar_url(user),
+            },
+            "is_master_user": is_master_user_id(user_id),
+        }
+    )
+    return RedirectResponse("/", status_code=303)
 
 
 @app.get("/logout")
@@ -495,32 +775,40 @@ async def index(request: Request):
     if r := auth_redirect(request):
         return r
 
+    guilds = await get_authorized_guilds(request)
+    guild_ids = [_safe_int(guild["guild_id"]) for guild in guilds]
+    guild_ids = [guild_id for guild_id in guild_ids if guild_id is not None]
+
     # Gather top-level stats
-    cases     = await db_fetchone("SELECT COUNT(*) as c FROM mod_cases")
-    tickets   = await db_fetchone("SELECT COUNT(*) as c FROM tickets WHERE status != 'closed'")
-    warnings  = await db_fetchone("SELECT COUNT(*) as c FROM warnings WHERE active = 1")
-    guilds    = await get_all_guilds()
-    reports   = await db_fetchone("SELECT COUNT(*) as c FROM reports WHERE status = 'open'")
-    giveaways = await db_fetchone("SELECT COUNT(*) as c FROM giveaways WHERE status = 'active'")
-    economy   = await db_fetchone("SELECT COUNT(*) as c FROM economy_accounts")
-    levels    = await db_fetchone("SELECT COUNT(*) as c FROM levels")
-    commands  = await db_fetchone("SELECT COUNT(*) as c FROM custom_commands")
+    total_cases = await count_scoped_rows("mod_cases", guild_ids)
+    open_tickets = await count_scoped_rows("tickets", guild_ids, "status != 'closed'")
+    active_warnings = await count_scoped_rows("warnings", guild_ids, "active = 1")
+    open_reports = await count_scoped_rows("reports", guild_ids, "status = 'open'")
+    active_giveaways = await count_scoped_rows("giveaways", guild_ids, "status = 'active'")
+    economy_accounts = await count_scoped_rows("economy_accounts", guild_ids)
+    level_entries = await count_scoped_rows("levels", guild_ids)
+    custom_commands = await count_scoped_rows("custom_commands", guild_ids)
 
     # Recent mod cases
-    recent_cases = await db_fetchall(
-        "SELECT * FROM mod_cases ORDER BY id DESC LIMIT 10"
-    )
+    if guild_ids:
+        scope_clause, scope_params = build_guild_scope_clause(guild_ids)
+        recent_cases = await db_fetchall(
+            f"SELECT * FROM mod_cases WHERE {scope_clause} ORDER BY id DESC LIMIT 10",
+            scope_params,
+        )
+    else:
+        recent_cases = []
 
     stats = {
-        "total_cases":     cases["c"] if cases else 0,
-        "open_tickets":    tickets["c"] if tickets else 0,
-        "active_warnings": warnings["c"] if warnings else 0,
-        "guild_count":     len(guilds),
-        "open_reports":    reports["c"] if reports else 0,
-        "active_giveaways": giveaways["c"] if giveaways else 0,
-        "economy_accounts": economy["c"] if economy else 0,
-        "level_entries":   levels["c"] if levels else 0,
-        "custom_commands": commands["c"] if commands else 0,
+        "total_cases": total_cases,
+        "open_tickets": open_tickets,
+        "active_warnings": active_warnings,
+        "guild_count": len(guilds),
+        "open_reports": open_reports,
+        "active_giveaways": active_giveaways,
+        "economy_accounts": economy_accounts,
+        "level_entries": level_entries,
+        "custom_commands": custom_commands,
     }
 
     return templates.TemplateResponse(request, "index.html", ctx({
@@ -540,7 +828,7 @@ async def config_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
 
     config_rows = []
     config_values = {}
@@ -562,6 +850,7 @@ async def config_page(request: Request, guild_id: int | None = None):
         "config_values": config_values,
         "config_schema": config_schema,
         "config_categories": dynamic_schema.get_config_categories(),
+        "can_refresh_models": is_master_session(request),
         "active_page": "config",
     }))
 
@@ -570,6 +859,7 @@ async def config_page(request: Request, guild_id: int | None = None):
 async def config_set(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     
     # Parse form data to extract config values
     form_data = await request.form()
@@ -615,6 +905,7 @@ async def config_set(request: Request, guild_id: int = Form(...)):
 async def config_delete(request: Request, guild_id: int = Form(...), key: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM guild_config WHERE guild_id = ? AND key = ?", (guild_id, key))
     return RedirectResponse(f"/config?guild_id={guild_id}", status_code=302)
 
@@ -624,6 +915,7 @@ async def refresh_models(request: Request):
     """API endpoint to refresh the model list."""
     if r := auth_redirect(request):
         return r
+    require_master_user(request)
     
     try:
         await dynamic_schema.refresh_models()
@@ -642,7 +934,7 @@ async def assistant_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     config_values: dict[str, str] = {}
     triggers: list[dict] = []
     custom_functions: list[dict] = []
@@ -714,6 +1006,7 @@ async def assistant_page(request: Request, guild_id: int | None = None):
 async def assistant_trigger_add(request: Request, guild_id: int = Form(...), pattern: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     pattern = pattern.strip()
     if pattern:
         re.compile(pattern)
@@ -728,6 +1021,7 @@ async def assistant_trigger_add(request: Request, guild_id: int = Form(...), pat
 async def assistant_trigger_delete(request: Request, guild_id: int = Form(...), trigger_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM assistant_triggers WHERE id = ? AND guild_id = ?", (trigger_id, guild_id))
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
@@ -743,6 +1037,7 @@ async def assistant_function_save(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     json.loads(parameters)
     await db_execute(
         "INSERT INTO custom_functions (guild_id, name, description, parameters, code, enabled) VALUES (?, ?, ?, ?, ?, 1) "
@@ -756,6 +1051,7 @@ async def assistant_function_save(
 async def assistant_function_toggle(request: Request, guild_id: int = Form(...), function_id: int = Form(...), enabled: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute(
         "UPDATE custom_functions SET enabled = ? WHERE id = ? AND guild_id = ?",
         (enabled, function_id, guild_id),
@@ -767,6 +1063,7 @@ async def assistant_function_toggle(request: Request, guild_id: int = Form(...),
 async def assistant_function_delete(request: Request, guild_id: int = Form(...), function_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM custom_functions WHERE id = ? AND guild_id = ?", (function_id, guild_id))
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
@@ -775,6 +1072,7 @@ async def assistant_function_delete(request: Request, guild_id: int = Form(...),
 async def assistant_listen_save(request: Request, guild_id: int = Form(...), channel_id: int = Form(...), enabled: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     key = f"listen_channel_{channel_id}"
     if enabled:
         await db_execute(
@@ -790,6 +1088,7 @@ async def assistant_listen_save(request: Request, guild_id: int = Form(...), cha
 async def assistant_channel_prompt_save(request: Request, guild_id: int = Form(...), channel_id: int = Form(...), prompt: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     key = f"channel_prompt_{channel_id}"
     if prompt.strip():
         await db_execute(
@@ -805,6 +1104,7 @@ async def assistant_channel_prompt_save(request: Request, guild_id: int = Form(.
 async def assistant_channel_prompt_delete(request: Request, guild_id: int = Form(...), channel_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM guild_config WHERE guild_id = ? AND key = ?", (guild_id, f"channel_prompt_{channel_id}"))
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
@@ -813,6 +1113,7 @@ async def assistant_channel_prompt_delete(request: Request, guild_id: int = Form
 async def assistant_usage_reset(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM token_usage WHERE guild_id = ?", (guild_id,))
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
@@ -821,6 +1122,7 @@ async def assistant_usage_reset(request: Request, guild_id: int = Form(...)):
 async def assistant_conversations_reset(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM conversation_history WHERE guild_id = ?", (guild_id,))
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
@@ -834,7 +1136,7 @@ async def community_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     config_values: dict[str, str] = {}
     selfroles: list[dict] = []
     highlights: list[dict] = []
@@ -871,6 +1173,7 @@ async def community_page(request: Request, guild_id: int | None = None):
 async def community_selfrole_add(request: Request, guild_id: int = Form(...), role_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("INSERT OR IGNORE INTO selfroles (guild_id, role_id) VALUES (?, ?)", (guild_id, role_id))
     return RedirectResponse(f"/community?guild_id={guild_id}", status_code=302)
 
@@ -879,6 +1182,7 @@ async def community_selfrole_add(request: Request, guild_id: int = Form(...), ro
 async def community_selfrole_delete(request: Request, guild_id: int = Form(...), role_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM selfroles WHERE guild_id = ? AND role_id = ?", (guild_id, role_id))
     return RedirectResponse(f"/community?guild_id={guild_id}", status_code=302)
 
@@ -887,6 +1191,7 @@ async def community_selfrole_delete(request: Request, guild_id: int = Form(...),
 async def community_highlight_add(request: Request, guild_id: int = Form(...), user_id: int = Form(...), keyword: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     keyword = keyword.strip().lower()
     if keyword:
         await db_execute("INSERT OR IGNORE INTO highlights (user_id, guild_id, keyword) VALUES (?, ?, ?)", (user_id, guild_id, keyword))
@@ -897,6 +1202,7 @@ async def community_highlight_add(request: Request, guild_id: int = Form(...), u
 async def community_highlight_delete(request: Request, guild_id: int = Form(...), user_id: int = Form(...), keyword: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM highlights WHERE guild_id = ? AND user_id = ? AND keyword = ?", (guild_id, user_id, keyword))
     return RedirectResponse(f"/community?guild_id={guild_id}", status_code=302)
 
@@ -905,6 +1211,7 @@ async def community_highlight_delete(request: Request, guild_id: int = Form(...)
 async def community_highlight_toggle_pause(request: Request, guild_id: int = Form(...), user_id: int = Form(...), paused: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     key = f"highlight_pause_{user_id}"
     await db_execute(
         "INSERT INTO guild_config (guild_id, key, value) VALUES (?, ?, ?) ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
@@ -925,6 +1232,7 @@ async def community_starboard_save(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     settings = {
         "starboard_enabled": starboard_enabled,
         "starboard_channel": starboard_channel.strip(),
@@ -952,7 +1260,7 @@ async def integrations_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     subscriptions: list[dict] = []
     poll_state: list[dict] = []
 
@@ -985,6 +1293,7 @@ async def integrations_github_save(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     repo = repo.strip()
     if not GITHUB_REPO_RE.match(repo):
         raise HTTPException(status_code=400, detail="Invalid repo format")
@@ -1001,6 +1310,7 @@ async def integrations_github_save(
 async def integrations_github_delete(request: Request, guild_id: int = Form(...), subscription_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     row = await db_fetchone(
         "SELECT repo FROM github_subscriptions WHERE id = ? AND guild_id = ?",
         (subscription_id, guild_id),
@@ -1028,6 +1338,7 @@ async def integrations_github_reset_state(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     repo = repo.strip()
     if not GITHUB_REPO_RE.match(repo):
         raise HTTPException(status_code=400, detail="Invalid repo format")
@@ -1046,7 +1357,7 @@ async def permissions_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     permission_rows: list[dict] = []
 
     if guild_id:
@@ -1074,6 +1385,7 @@ async def permissions_save(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     if target_type not in {"role", "channel", "user"}:
         raise HTTPException(status_code=400, detail="Invalid target type")
     await db_execute(
@@ -1088,6 +1400,7 @@ async def permissions_save(
 async def permissions_delete(request: Request, guild_id: int = Form(...), permission_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM command_permissions WHERE id = ? AND guild_id = ?", (permission_id, guild_id))
     return RedirectResponse(f"/permissions?guild_id={guild_id}", status_code=302)
 
@@ -1101,7 +1414,7 @@ async def moderation_page(request: Request, guild_id: int | None = None, user_id
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     per_page = 25
     offset = (page - 1) * per_page
 
@@ -1141,6 +1454,7 @@ async def moderation_page(request: Request, guild_id: int | None = None, user_id
 async def moderation_delete(request: Request, case_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM mod_cases WHERE id = ? AND guild_id = ?", (case_id, guild_id))
     return RedirectResponse(f"/moderation?guild_id={guild_id}", status_code=302)
 
@@ -1154,7 +1468,7 @@ async def warnings_page(request: Request, guild_id: int | None = None, user_id: 
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     warnings = []
     if guild_id:
         if user_id:
@@ -1181,6 +1495,7 @@ async def warnings_page(request: Request, guild_id: int | None = None, user_id: 
 async def warning_delete(request: Request, warning_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("UPDATE warnings SET active = 0 WHERE id = ? AND guild_id = ?", (warning_id, guild_id))
     return RedirectResponse(f"/warnings?guild_id={guild_id}", status_code=302)
 
@@ -1194,7 +1509,7 @@ async def tickets_page(request: Request, guild_id: int | None = None, status: st
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     tickets = []
     if guild_id:
         if status == "all":
@@ -1225,6 +1540,7 @@ async def ticket_transcript(request: Request, ticket_id: int):
     ticket = await db_fetchone("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
     if not ticket:
         raise HTTPException(404, "Ticket not found")
+    await require_guild_access(request, int(ticket["guild_id"]))
     messages = await db_fetchall(
         "SELECT * FROM ticket_messages WHERE ticket_id = ? ORDER BY id",
         (ticket_id,),
@@ -1246,7 +1562,7 @@ async def automod_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     filters = []
     if guild_id:
         filters = await db_fetchall(
@@ -1266,6 +1582,7 @@ async def automod_page(request: Request, guild_id: int | None = None):
 async def automod_add(request: Request, guild_id: int = Form(...), filter_type: str = Form(...), pattern: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     try:
         await db_execute(
             "INSERT OR IGNORE INTO automod_filters (guild_id, filter_type, pattern) VALUES (?, ?, ?)",
@@ -1280,6 +1597,7 @@ async def automod_add(request: Request, guild_id: int = Form(...), filter_type: 
 async def automod_delete(request: Request, filter_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM automod_filters WHERE id = ? AND guild_id = ?", (filter_id, guild_id))
     return RedirectResponse(f"/automod?guild_id={guild_id}", status_code=302)
 
@@ -1293,7 +1611,7 @@ async def economy_page(request: Request, guild_id: int | None = None, page: int 
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     per_page = 25
     offset = (page - 1) * per_page
     accounts = []
@@ -1324,6 +1642,7 @@ async def economy_page(request: Request, guild_id: int | None = None, page: int 
 async def economy_set(request: Request, guild_id: int = Form(...), user_id: int = Form(...), balance: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute(
         "INSERT INTO economy_accounts (guild_id, user_id, balance) VALUES (?, ?, ?) "
         "ON CONFLICT(guild_id, user_id) DO UPDATE SET balance = excluded.balance",
@@ -1336,6 +1655,7 @@ async def economy_set(request: Request, guild_id: int = Form(...), user_id: int 
 async def economy_delete(request: Request, guild_id: int = Form(...), user_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM economy_accounts WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
     return RedirectResponse(f"/economy?guild_id={guild_id}", status_code=302)
 
@@ -1349,7 +1669,7 @@ async def levels_page(request: Request, guild_id: int | None = None, page: int =
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     per_page = 25
     offset = (page - 1) * per_page
     entries = []
@@ -1380,6 +1700,7 @@ async def levels_page(request: Request, guild_id: int | None = None, page: int =
 async def levels_set(request: Request, guild_id: int = Form(...), user_id: int = Form(...), xp: int = Form(...), level: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute(
         "INSERT INTO levels (guild_id, user_id, xp, level) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(guild_id, user_id) DO UPDATE SET xp = excluded.xp, level = excluded.level",
@@ -1392,6 +1713,7 @@ async def levels_set(request: Request, guild_id: int = Form(...), user_id: int =
 async def levels_delete(request: Request, guild_id: int = Form(...), user_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM levels WHERE guild_id = ? AND user_id = ?", (guild_id, user_id))
     return RedirectResponse(f"/levels?guild_id={guild_id}", status_code=302)
 
@@ -1405,7 +1727,7 @@ async def giveaways_page(request: Request, guild_id: int | None = None, status: 
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     giveaways = []
     if guild_id:
         if status == "all":
@@ -1437,7 +1759,7 @@ async def reports_page(request: Request, guild_id: int | None = None, status: st
     if r := auth_redirect(request):
         return r
 
-    guilds = await db_fetchall("SELECT DISTINCT guild_id FROM guild_config ORDER BY guild_id")
+    guilds = await get_authorized_guilds(request, guild_id)
     reports = []
     if guild_id:
         if status == "all":
@@ -1464,6 +1786,7 @@ async def reports_page(request: Request, guild_id: int | None = None, status: st
 async def reports_resolve(request: Request, report_id: int = Form(...), guild_id: int = Form(...), note: str = Form("")):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute(
         "UPDATE reports SET status = 'resolved', resolution_note = ?, resolved_at = datetime('now') WHERE id = ? AND guild_id = ?",
         (note, report_id, guild_id),
@@ -1475,6 +1798,7 @@ async def reports_resolve(request: Request, report_id: int = Form(...), guild_id
 async def reports_dismiss(request: Request, report_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute(
         "UPDATE reports SET status = 'dismissed', resolved_at = datetime('now') WHERE id = ? AND guild_id = ?",
         (report_id, guild_id),
@@ -1491,7 +1815,7 @@ async def custom_commands_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     commands = []
     if guild_id:
         commands = await db_fetchall(
@@ -1511,6 +1835,7 @@ async def custom_commands_page(request: Request, guild_id: int | None = None):
 async def custom_commands_add(request: Request, guild_id: int = Form(...), name: str = Form(...), response: str = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     try:
         await db_execute(
             "INSERT OR REPLACE INTO custom_commands (guild_id, name, response, creator_id) VALUES (?, ?, ?, 0)",
@@ -1525,6 +1850,7 @@ async def custom_commands_add(request: Request, guild_id: int = Form(...), name:
 async def custom_commands_delete(request: Request, cmd_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM custom_commands WHERE id = ? AND guild_id = ?", (cmd_id, guild_id))
     return RedirectResponse(f"/custom-commands?guild_id={guild_id}", status_code=302)
 
@@ -1538,7 +1864,7 @@ async def reminders_page(request: Request, guild_id: int | None = None):
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     reminders = []
     if guild_id:
         reminders = await db_fetchall(
@@ -1558,6 +1884,7 @@ async def reminders_page(request: Request, guild_id: int | None = None):
 async def reminders_delete(request: Request, reminder_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
     return RedirectResponse(f"/reminders?guild_id={guild_id}", status_code=302)
 
@@ -1583,7 +1910,7 @@ async def knowledge_page(
     if r := auth_redirect(request):
         return r
 
-    guilds = await get_all_guilds()
+    guilds = await get_authorized_guilds(request, guild_id)
     entries = []
     sources = []
     learned_facts = []
@@ -1656,6 +1983,7 @@ async def knowledge_page(
 async def knowledge_delete(request: Request, entry_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     row = await db_fetchone("SELECT qdrant_id FROM embeddings WHERE id = ? AND guild_id = ?", (entry_id, guild_id))
     await db_execute("DELETE FROM embeddings WHERE id = ? AND guild_id = ?", (entry_id, guild_id))
     if row and row["qdrant_id"]:
@@ -1668,6 +1996,7 @@ async def knowledge_delete(request: Request, entry_id: int = Form(...), guild_id
 async def knowledge_delete_source(request: Request, source_url: str = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM embeddings WHERE guild_id = ? AND source_url = ?", (guild_id, source_url))
     await db_execute("DELETE FROM crawl_sources WHERE guild_id = ? AND url = ?", (guild_id, source_url))
     from bot.qdrant_service import QdrantService
@@ -1679,7 +2008,7 @@ async def knowledge_delete_source(request: Request, source_url: str = Form(...),
 async def knowledge_repair_crawl_metadata(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
-    from urllib.parse import urlencode
+    await require_guild_access(request, guild_id)
 
     summary = await repair_legacy_crawl_metadata(guild_id)
     query = urlencode({
@@ -1697,7 +2026,7 @@ async def knowledge_repair_crawl_metadata(request: Request, guild_id: int = Form
 async def knowledge_reset(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
-    from urllib.parse import urlencode
+    await require_guild_access(request, guild_id)
 
     summary = await clear_knowledge_base(guild_id)
     query = urlencode({
@@ -1715,9 +2044,10 @@ async def knowledge_reset(request: Request, guild_id: int = Form(...)):
 async def knowledge_add_fact(request: Request, guild_id: int = Form(...), fact: str = Form(...), source: str = Form("training")):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     try:
         await db_execute(
-            "INSERT OR IGNORE INTO learned_facts (guild_id, fact, source) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO learned_facts (guild_id, fact, source, approved) VALUES (?, ?, ?, 1)",
             (guild_id, fact.strip(), source),
         )
     except Exception:
@@ -1729,7 +2059,12 @@ async def knowledge_add_fact(request: Request, guild_id: int = Form(...), fact: 
 async def knowledge_delete_fact(request: Request, fact_id: int = Form(...), guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
+    row = await db_fetchone("SELECT qdrant_id FROM learned_facts WHERE id = ? AND guild_id = ?", (fact_id, guild_id))
     await db_execute("DELETE FROM learned_facts WHERE id = ? AND guild_id = ?", (fact_id, guild_id))
+    if row and row["qdrant_id"]:
+        from bot.qdrant_service import QdrantService
+        await QdrantService().delete_fact(guild_id, row["qdrant_id"])
     return RedirectResponse(f"/knowledge?guild_id={guild_id}&tab=training", status_code=302)
 
 
@@ -1737,10 +2072,15 @@ async def knowledge_delete_fact(request: Request, fact_id: int = Form(...), guil
 async def knowledge_toggle_fact(request: Request, fact_id: int = Form(...), guild_id: int = Form(...), approved: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
+    row = await db_fetchone("SELECT qdrant_id FROM learned_facts WHERE id = ? AND guild_id = ?", (fact_id, guild_id))
     await db_execute(
         "UPDATE learned_facts SET approved = ? WHERE id = ? AND guild_id = ?",
         (approved, fact_id, guild_id),
     )
+    if row and row["qdrant_id"]:
+        from bot.qdrant_service import QdrantService
+        await QdrantService().set_fact_approved(guild_id, row["qdrant_id"], int(approved))
     return RedirectResponse(f"/knowledge?guild_id={guild_id}&tab=training", status_code=302)
 
 
@@ -1748,7 +2088,10 @@ async def knowledge_toggle_fact(request: Request, fact_id: int = Form(...), guil
 async def knowledge_reset_facts(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM learned_facts WHERE guild_id = ?", (guild_id,))
+    from bot.qdrant_service import QdrantService
+    await QdrantService().reset_facts(guild_id)
     return RedirectResponse(f"/knowledge?guild_id={guild_id}&tab=training", status_code=302)
 
 
@@ -1756,6 +2099,7 @@ async def knowledge_reset_facts(request: Request, guild_id: int = Form(...)):
 async def knowledge_reset_feedback(request: Request, guild_id: int = Form(...)):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM response_feedback WHERE guild_id = ?", (guild_id,))
     return RedirectResponse(f"/knowledge?guild_id={guild_id}&tab=feedback", status_code=302)
 
@@ -1871,20 +2215,31 @@ async def api_crawl_start(
 ):
     if r := auth_redirect(request):
         return r
+    await require_guild_access(request, guild_id)
     import uuid
     job_id = str(uuid.uuid4())[:8]
-    _crawl_jobs[job_id] = {"status": "queued", "pages": 0, "chunks": 0, "error": None}
+    _crawl_jobs[job_id] = {
+        "status": "queued",
+        "pages": 0,
+        "chunks": 0,
+        "error": None,
+        "guild_id": guild_id,
+        "user_id": get_session_user_id(request),
+    }
     background_tasks.add_task(_run_crawl, job_id, guild_id, url, max_pages, chunk_size, replace)
     return JSONResponse({"job_id": job_id})
 
 
 @app.get("/api/crawl/status/{job_id}")
 async def api_crawl_status(request: Request, job_id: str):
-    if not request.session.get("authenticated"):
+    if not is_authenticated(request):
         raise HTTPException(401)
     job = _crawl_jobs.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    current_user_id = get_session_user_id(request)
+    if not is_master_session(request) and job.get("user_id") != current_user_id:
+        raise HTTPException(403, "You do not have access to this crawl job")
     return JSONResponse(job)
 
 
@@ -1895,22 +2250,20 @@ async def api_crawl_status(request: Request, job_id: str):
 @app.get("/api/stats")
 async def api_stats(request: Request):
     require_auth(request)
-    cases     = await db_fetchone("SELECT COUNT(*) as c FROM mod_cases")
-    tickets   = await db_fetchone("SELECT COUNT(*) as c FROM tickets WHERE status != 'closed'")
-    warnings  = await db_fetchone("SELECT COUNT(*) as c FROM warnings WHERE active = 1")
-    reports   = await db_fetchone("SELECT COUNT(*) as c FROM reports WHERE status = 'open'")
-    giveaways = await db_fetchone("SELECT COUNT(*) as c FROM giveaways WHERE status = 'active'")
+    guilds = await get_accessible_guilds(request)
+    guild_ids = [_safe_int(guild["guild_id"]) for guild in guilds]
+    guild_ids = [guild_id for guild_id in guild_ids if guild_id is not None]
     return {
-        "total_cases":     cases["c"] if cases else 0,
-        "open_tickets":    tickets["c"] if tickets else 0,
-        "active_warnings": warnings["c"] if warnings else 0,
-        "open_reports":    reports["c"] if reports else 0,
-        "active_giveaways": giveaways["c"] if giveaways else 0,
+        "total_cases": await count_scoped_rows("mod_cases", guild_ids),
+        "open_tickets": await count_scoped_rows("tickets", guild_ids, "status != 'closed'"),
+        "active_warnings": await count_scoped_rows("warnings", guild_ids, "active = 1"),
+        "open_reports": await count_scoped_rows("reports", guild_ids, "status = 'open'"),
+        "active_giveaways": await count_scoped_rows("giveaways", guild_ids, "status = 'active'"),
     }
 
 
 @app.get("/api/guilds")
 async def api_guilds(request: Request):
     require_auth(request)
-    guilds = await get_all_guilds()
+    guilds = await get_accessible_guilds(request)
     return [g["guild_id"] for g in guilds]

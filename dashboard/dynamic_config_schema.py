@@ -31,27 +31,30 @@ class DynamicConfigSchema:
         # Add dynamic model fields
         try:
             # Chat models
-            chat_models = await self._get_model_options("chat")
+            chat_model_infos = await self.model_discovery.get_available_models("chat")
+            chat_models = self._build_model_options(chat_model_infos)
             schema["assistant_model"] = {
                 "type": "select",
                 "label": "AI Model",
                 "description": "The language model to use for responses",
                 "options": chat_models,
-                "default": "gpt-3.5-turbo" if self._model_exists(chat_models, "gpt-3.5-turbo") else (chat_models[0]["value"] if chat_models else "gpt-3.5-turbo"),
+                "default": self.model_discovery.select_default_model_id(chat_model_infos, "chat") or "gpt-3.5-turbo",
             }
             
             # Embedding models
-            embedding_models = await self._get_model_options("embedding")
+            embedding_model_infos = await self.model_discovery.get_available_models("embedding")
+            embedding_models = self._build_model_options(embedding_model_infos)
             schema["assistant_embedding_model"] = {
                 "type": "select",
                 "label": "Embedding Model",
                 "description": "Model used for text embeddings (RAG/knowledge base)",
                 "options": embedding_models,
-                "default": "text-embedding-3-small" if self._model_exists(embedding_models, "text-embedding-3-small") else (embedding_models[0]["value"] if embedding_models else "text-embedding-3-small"),
+                "default": self.model_discovery.select_default_model_id(embedding_model_infos, "embedding") or "text-embedding-3-small",
             }
             
             # Image models
-            image_models = await self._get_model_options("image")
+            image_model_infos = await self.model_discovery.get_available_models("image")
+            image_models = self._build_model_options(image_model_infos)
             
             # If no native image models found, always provide fallback options
             if not image_models:
@@ -63,7 +66,7 @@ class DynamicConfigSchema:
                 "label": "Image Generation Model",
                 "description": "Model used for generating images",
                 "options": image_models,
-                "default": "dall-e-3" if self._model_exists(image_models, "dall-e-3") else (image_models[0]["value"] if image_models else "dall-e-3"),
+                "default": self.model_discovery.select_default_model_id(image_model_infos, "image") or (image_models[0]["value"] if image_models else "dall-e-3"),
             }
             
         except Exception as e:
@@ -88,24 +91,7 @@ class DynamicConfigSchema:
         
         try:
             models = await self.model_discovery.get_available_models(model_type)
-            options = []
-            
-            for model in models:
-                option = {
-                    "value": model.id,
-                    "label": f"{model.name} ({model.provider})",
-                }
-                
-                # Add additional info to label if available
-                if model.context_length:
-                    option["label"] += f" - {model.context_length:,} tokens"
-                
-                if model.capabilities:
-                    caps = ", ".join(model.capabilities[:3])  # Show first 3 capabilities
-                    if caps:
-                        option["label"] += f" - {caps}"
-                
-                options.append(option)
+            options = self._build_model_options(models)
             
             # Cache the results
             self._model_cache[cache_key] = options
@@ -116,6 +102,27 @@ class DynamicConfigSchema:
         except Exception as e:
             logger.error(f"Failed to get {model_type} models: {e}")
             return self._get_fallback_model_options(model_type)
+
+    def _build_model_options(self, models: List["ModelInfo"]) -> List[Dict[str, Any]]:
+        options = []
+
+        for model in models:
+            option = {
+                "value": model.id,
+                "label": f"{model.name} ({model.provider})",
+            }
+
+            if model.context_length:
+                option["label"] += f" - {model.context_length:,} tokens"
+
+            if model.capabilities:
+                caps = ", ".join(model.capabilities[:3])
+                if caps:
+                    option["label"] += f" - {caps}"
+
+            options.append(option)
+
+        return options
     
     def _model_exists(self, options: List[Dict[str, Any]], model_id: str) -> bool:
         """Check if a model exists in the options list."""
