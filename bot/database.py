@@ -370,6 +370,18 @@ CREATE TABLE IF NOT EXISTS learned_message_marks (
 );
 CREATE INDEX IF NOT EXISTS idx_learned_message_marks_guild ON learned_message_marks (guild_id, channel_id);
 
+-- Named prompt templates per guild (saved presets)
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    INTEGER NOT NULL,
+    name        TEXT    NOT NULL,
+    content     TEXT    NOT NULL,
+    created_by  INTEGER NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(guild_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_templates_guild ON prompt_templates (guild_id);
+
 -- Response feedback: per-message thumbs up/down ratings
 CREATE TABLE IF NOT EXISTS response_feedback (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -494,6 +506,22 @@ class Database:
         )
         await self._db.execute(  # type: ignore[union-attr]
             "CREATE INDEX IF NOT EXISTS idx_feedback_guild ON response_feedback (guild_id)"
+        )
+
+        # Create prompt_templates table if missing
+        await self._db.execute(  # type: ignore[union-attr]
+            """CREATE TABLE IF NOT EXISTS prompt_templates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id    INTEGER NOT NULL,
+                name        TEXT    NOT NULL,
+                content     TEXT    NOT NULL,
+                created_by  INTEGER NOT NULL,
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(guild_id, name)
+            )"""
+        )
+        await self._db.execute(  # type: ignore[union-attr]
+            "CREATE INDEX IF NOT EXISTS idx_templates_guild ON prompt_templates (guild_id)"
         )
         await self._db.commit()  # type: ignore[union-attr]
 
@@ -1951,3 +1979,55 @@ class Database:
         )
         await self.conn.commit()
         return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Prompt templates
+    # ------------------------------------------------------------------
+
+    async def save_prompt_template(
+        self, guild_id: int, name: str, content: str, created_by: int
+    ) -> bool:
+        """Upsert a named prompt template. Returns True on insert, False on update."""
+        cur = await self.conn.execute(
+            "SELECT id FROM prompt_templates WHERE guild_id = ? AND name = ?",
+            (guild_id, name),
+        )
+        existing = await cur.fetchone()
+        if existing:
+            await self.conn.execute(
+                "UPDATE prompt_templates SET content = ?, created_by = ?, "
+                "created_at = datetime('now') WHERE guild_id = ? AND name = ?",
+                (content, created_by, guild_id, name),
+            )
+            await self.conn.commit()
+            return False
+        await self.conn.execute(
+            "INSERT INTO prompt_templates (guild_id, name, content, created_by) "
+            "VALUES (?, ?, ?, ?)",
+            (guild_id, name, content, created_by),
+        )
+        await self.conn.commit()
+        return True
+
+    async def get_prompt_template(self, guild_id: int, name: str):
+        cur = await self.conn.execute(
+            "SELECT * FROM prompt_templates WHERE guild_id = ? AND name = ?",
+            (guild_id, name),
+        )
+        return await cur.fetchone()
+
+    async def list_prompt_templates(self, guild_id: int):
+        cur = await self.conn.execute(
+            "SELECT id, name, content, created_by, created_at FROM prompt_templates "
+            "WHERE guild_id = ? ORDER BY name",
+            (guild_id,),
+        )
+        return await cur.fetchall()
+
+    async def delete_prompt_template(self, guild_id: int, name: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM prompt_templates WHERE guild_id = ? AND name = ?",
+            (guild_id, name),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0

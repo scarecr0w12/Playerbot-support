@@ -2,222 +2,261 @@
 {% block title %}Guild Config — Bot Dashboard{% endblock %}
 {% block header %}Guild Configuration{% endblock %}
 
+{% block head_extra %}
+<style>
+  .config-section { border: 1px solid rgba(148,163,184,0.10); border-radius: 0.85rem; overflow: hidden; }
+  .config-section summary {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.9rem 1.1rem; cursor: pointer; list-style: none;
+    user-select: none;
+    background: rgba(14,22,38,0.6);
+    transition: background 0.14s ease;
+  }
+  .config-section summary::-webkit-details-marker { display: none; }
+  .config-section summary:hover { background: rgba(20,32,52,0.8); }
+  .config-section[open] summary { border-bottom: 1px solid rgba(148,163,184,0.08); }
+  .config-section summary .toggle-icon { transition: transform 0.2s ease; margin-left: auto; }
+  .config-section[open] summary .toggle-icon { transform: rotate(90deg); }
+  .config-field label { display: block; font-size: 0.8rem; font-weight: 500; color: #8ab0d8; margin-bottom: 0.35rem; }
+  .config-field .field-desc { font-size: 0.72rem; color: #3d5272; margin-top: 0.2rem; line-height: 1.4; }
+  .config-field .input, .config-field select, .config-field textarea {
+    background: rgba(10,17,30,0.85);
+    border: 1px solid rgba(51,75,107,0.7);
+    border-radius: 0.55rem; color: #d8eafc; font-size: 0.83rem;
+    padding: 0.52rem 0.8rem; width: 100%; outline: none; box-sizing: border-box;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  }
+  .config-field .input:focus, .config-field select:focus, .config-field textarea:focus {
+    border-color: rgba(79,124,255,0.75); box-shadow: 0 0 0 3px rgba(79,124,255,0.1);
+  }
+  .config-field select option { background: #0f1e33; }
+  .config-field textarea { resize: vertical; min-height: 80px; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="flex flex-col xl:flex-row gap-6">
+<div class="flex flex-col xl:flex-row gap-5">
+
   <!-- Guild selector -->
-  <div class="w-full xl:w-64 flex-shrink-0">
-    <div class="card p-4">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
-      <div class="space-y-1">
+  <div class="w-full xl:w-56 flex-shrink-0">
+    <div class="card p-3">
+      <p class="text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider px-1 mb-2">Select Guild</p>
+      <div class="space-y-0.5">
         {% for g in guilds %}
         <a href="/config?guild_id={{ g.guild_id }}"
-           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
-           style="text-decoration:none;">
-          <i class="fa fa-server text-xs"></i>
-          <span class="font-mono">{{ g.guild_id }}</span>
+           class="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs transition-colors group"
+           style="text-decoration:none;{% if guild_id == g.guild_id %}background:rgba(88,101,242,0.15);border:1px solid rgba(88,101,242,0.28);color:#fff;{% else %}color:#4d6485;{% endif %}">
+          <div class="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0"
+               style="background:{% if guild_id == g.guild_id %}rgba(88,101,242,0.25){% else %}rgba(148,163,184,0.07){% endif %};">
+            <i class="fa fa-server" style="font-size:0.6rem;color:{% if guild_id == g.guild_id %}#8899ff{% else %}#3d5272{% endif %};"></i>
+          </div>
+          <span class="font-mono truncate">{{ g.guild_id }}</span>
+          {% if guild_id == g.guild_id %}<i class="fa fa-check ml-auto" style="font-size:0.6rem;color:#5865F2;"></i>{% endif %}
         </a>
         {% else %}
-        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
+        <p class="text-[#2d4060] text-xs text-center py-5">No guilds found</p>
         {% endfor %}
       </div>
     </div>
   </div>
 
-  <!-- Configuration forms -->
-  <div class="flex-1">
+  <!-- Configuration area -->
+  <div class="flex-1 min-w-0">
     {% if guild_id %}
-    <div class="card overflow-hidden">
-      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-        <h2 class="font-semibold text-white">Config for Guild <span class="font-mono text-[#5865F2]">{{ guild_id }}</span></h2>
-        <span class="text-xs text-gray-500">{{ config_rows|length }} keys set</span>
+
+    <!-- Config form -->
+    <div class="card overflow-hidden mb-5">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-[rgba(148,163,184,0.08)]">
+        <div class="flex items-center gap-2">
+          <div class="w-6 h-6 rounded-md bg-[#5865F2]/12 flex items-center justify-center">
+            <i class="fa fa-sliders text-[#5865F2]" style="font-size:0.65rem;"></i>
+          </div>
+          <h2 class="font-semibold text-white text-sm">
+            Guild <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>
+          </h2>
+        </div>
+        <span class="kbd-pill"><i class="fa fa-key" style="font-size:0.6rem;"></i> {{ config_rows|length }} keys</span>
       </div>
-      
-      <div class="p-5">
-        <!-- Configuration form -->
-        <form method="post" action="/config/set" class="space-y-6">
-          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-          
-          {% if config_categories %}
-          {% for category, keys in config_categories.items() %}
-          <div class="border border-gray-800 rounded-lg p-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-white flex items-center gap-2">
-                {% if category == "AI Assistant" %}<i class="fa fa-robot text-blue-400"></i>
-                {% elif category == "Moderation" %}<i class="fa fa-gavel text-red-400"></i>
-                {% elif category == "Auto-Moderation" %}<i class="fa fa-shield text-orange-400"></i>
-                {% elif category == "Welcome & Tickets" %}<i class="fa fa-door-open text-green-400"></i>
-                {% elif category == "Economy" %}<i class="fa fa-coins text-yellow-400"></i>
-                {% elif category == "Leveling" %}<i class="fa fa-chart-line text-purple-400"></i>
-                {% elif category == "Starboard" %}<i class="fa fa-star text-amber-400"></i>
-                {% else %}<i class="fa fa-gear text-indigo-400"></i>
-                {% endif %}
-                {{ category }} ({{ keys|length }} keys)
-              </h3>
-              {% if category == "AI Assistant" and can_refresh_models %}
-              <button type="button" onclick="refreshModels()" class="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-1" id="refresh-models-btn">
-                <i class="fa fa-refresh"></i> Refresh Models
-              </button>
+
+      <form method="post" action="/config/set" id="config-form" class="p-4 space-y-2.5">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+
+        {% if config_categories %}
+        {% for category, keys in config_categories.items() %}
+        {% set cat_icons = {
+          "AI Assistant":       ("fa-robot",        "#60a5fa"),
+          "Moderation":         ("fa-gavel",         "#f87171"),
+          "Auto-Moderation":    ("fa-shield-halved", "#fb923c"),
+          "Welcome & Tickets":  ("fa-door-open",     "#4ade80"),
+          "Economy":            ("fa-coins",         "#facc15"),
+          "Leveling":           ("fa-chart-line",    "#c084fc"),
+          "Starboard":          ("fa-star",          "#fbbf24"),
+        } %}
+        {% set cat_cfg = cat_icons.get(category, ("fa-gear", "#818cf8")) %}
+
+        <details class="config-section" {% if loop.first %}open{% endif %}>
+          <summary>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                 style="background:{{ cat_cfg[1] }}18;border:1px solid {{ cat_cfg[1] }}28;">
+              <i class="fa {{ cat_cfg[0] }}" style="color:{{ cat_cfg[1] }};font-size:0.75rem;"></i>
+            </div>
+            <div>
+              <span class="text-sm font-semibold text-white">{{ category }}</span>
+              <span class="text-[0.7rem] text-[#3d5272] ml-2">{{ keys|length }} settings</span>
+            </div>
+            {% if category == "AI Assistant" and can_refresh_models %}
+            <button type="button" onclick="event.preventDefault();refreshModels()"
+                    id="refresh-models-btn"
+                    class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[0.72rem] font-medium text-[#60a5fa] hover:text-white border border-[rgba(96,165,250,0.25)] hover:border-[rgba(96,165,250,0.5)] hover:bg-[rgba(96,165,250,0.1)] transition-all">
+              <i class="fa fa-rotate-right" style="font-size:0.65rem;"></i> Refresh Models
+            </button>
+            {% endif %}
+            <i class="fa fa-chevron-right toggle-icon text-[#2d4060]" style="font-size:0.65rem;"></i>
+          </summary>
+
+          <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4" style="background:rgba(8,14,25,0.4);">
+            {% for key in keys %}
+            {% set schema = config_schema[key] %}
+            {% set current_value = config_values.get(key, schema.get('default', '')) %}
+            <div class="config-field">
+              <label>
+                {{ schema.label }}
+                {% if schema.required is defined and schema.required %}<span style="color:#f87171;margin-left:0.2rem;">*</span>{% endif %}
+              </label>
+
+              {% if schema.type == "select" %}
+              <select name="config_{{ key }}" class="input">
+                {% for option in schema.options %}
+                <option value="{{ option.value }}" {% if current_value == option.value %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+
+              {% elif schema.type == "textarea" %}
+              <textarea name="config_{{ key }}" rows="3" placeholder="{{ schema.get('placeholder', '') }}">{{ current_value }}</textarea>
+
+              {% else %}
+              <input type="text" name="config_{{ key }}" class="input"
+                     placeholder="{{ schema.get('placeholder', '') }}" value="{{ current_value }}"/>
+              {% endif %}
+
+              {% if schema.description %}
+              <p class="field-desc">{{ schema.description }}</p>
               {% endif %}
             </div>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {% for key in keys %}
-                {% set schema = config_schema[key] %}
-                {% set current_value = config_values.get(key, schema.get('default', '')) %}
-                
-                <div class="space-y-2">
-                  <label class="block text-sm font-medium text-gray-300">
-                    {{ schema.label }}
-                    {% if schema.description %}
-                    <span class="text-xs text-gray-500 block normal">{{ schema.description }}</span>
-                    {% endif %}
-                  </label>
-                  
-                  {% if schema.type == "select" %}
-                  <select name="config_{{ key }}" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none">
-                    {% for option in schema.options %}
-                    <option value="{{ option.value }}" {% if current_value == option.value %}selected{% endif %}>
-                      {{ option.label }}
-                    </option>
-                    {% endfor %}
-                  </select>
-                  
-                  {% elif schema.type == "textarea" %}
-                  <textarea name="config_{{ key }}" rows="4" 
-                            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none resize-vertical"
-                            placeholder="{{ schema.get('placeholder', '') }}">{{ current_value }}</textarea>
-                  
-                  {% elif schema.type == "text" %}
-                  <input type="text" name="config_{{ key }}" 
-                         class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-[#5865F2] focus:outline-none"
-                         placeholder="{{ schema.get('placeholder', '') }}"
-                         value="{{ current_value }}" />
-                  {% endif %}
-                </div>
-              {% endfor %}
-            </div>
+            {% endfor %}
           </div>
-          {% endfor %}
-          {% else %}
-          <div class="text-center text-gray-500 py-8">
-            <p>No configuration categories available.</p>
-          </div>
-          {% endif %}
-          
-          <div class="flex justify-end">
-            <button type="submit" class="btn-primary">
-              <i class="fa fa-save"></i> Save Configuration
-            </button>
-          </div>
-        </form>
-      </div>
+        </details>
+        {% endfor %}
+        {% else %}
+        <div class="text-center py-10">
+          <i class="fa fa-gear text-2xl text-[#1e3050] mb-2 block"></i>
+          <p class="text-[#2d4060] text-sm">No configuration categories available.</p>
+        </div>
+        {% endif %}
+
+        <div class="flex justify-end pt-2">
+          <button type="submit" class="btn-primary">
+            <i class="fa fa-floppy-disk"></i> Save Configuration
+          </button>
+        </div>
+      </form>
     </div>
-    
-    <!-- Current configuration table -->
-    <div class="card overflow-hidden mt-6">
-      <div class="px-5 py-4 border-b border-gray-800">
-        <h3 class="font-semibold text-white">Current Configuration</h3>
+
+    <!-- Current config table -->
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-[rgba(148,163,184,0.08)]">
+        <div class="flex items-center gap-2">
+          <div class="w-6 h-6 rounded-md bg-[rgba(148,163,184,0.08)] flex items-center justify-center">
+            <i class="fa fa-table-list text-[#4d6485]" style="font-size:0.65rem;"></i>
+          </div>
+          <h3 class="font-semibold text-white text-sm">Raw Configuration</h3>
+        </div>
+        <span class="text-[0.7rem] text-[#2d4060]">{{ config_rows|length }} entries</span>
       </div>
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full text-xs">
           <thead>
-            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
-              <th class="px-5 py-3 font-medium">Key</th>
-              <th class="px-5 py-3 font-medium">Value</th>
-              <th class="px-5 py-3 font-medium w-16">Actions</th>
+            <tr style="border-bottom:1px solid rgba(148,163,184,0.08);">
+              <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">Key</th>
+              <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">Value</th>
+              <th class="px-5 py-2.5 w-14"></th>
             </tr>
           </thead>
           <tbody>
             {% for row in config_rows %}
             <tr class="table-row">
-              <td class="px-5 py-3 text-gray-300 font-mono text-xs">{{ row.key }}</td>
-              <td class="px-5 py-3 text-gray-400 max-w-[400px] break-all text-xs">{{ row.value }}</td>
-              <td class="px-5 py-3">
-                <form method="post" action="/config/delete" onsubmit="return confirm('Delete key {{ row.key }}?')">
+              <td class="px-5 py-2.5 text-[#8ab0d8] font-mono">{{ row.key }}</td>
+              <td class="px-5 py-2.5 text-[#4d6485] max-w-[400px] break-all">{{ row.value }}</td>
+              <td class="px-5 py-2.5">
+                <form method="post" action="/config/delete"
+                      data-confirm-msg="Delete key &quot;{{ row.key }}&quot;? This cannot be undone.">
                   <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
                   <input type="hidden" name="key" value="{{ row.key }}"/>
-                  <button class="btn-danger"><i class="fa fa-trash"></i></button>
+                  <button type="submit" class="btn-danger" title="Delete"><i class="fa fa-trash"></i></button>
                 </form>
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="px-5 py-8 text-center text-gray-500">No config keys set</td></tr>
+            <tr>
+              <td colspan="3" class="px-5 py-10 text-center">
+                <i class="fa fa-inbox text-2xl text-[#1e3050] mb-2 block"></i>
+                <p class="text-[#2d4060]">No config keys set yet</p>
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
     </div>
+
     {% else %}
-    <div class="card p-12 text-center">
-      <i class="fa fa-sliders text-4xl text-gray-700 mb-3"></i>
-      <p class="text-gray-400">Select a guild to view and edit its configuration.</p>
+    <div class="card p-14 text-center">
+      <div class="w-12 h-12 rounded-xl bg-[rgba(148,163,184,0.07)] border border-[rgba(148,163,184,0.1)] flex items-center justify-center mx-auto mb-4">
+        <i class="fa fa-sliders text-[#2d4060] text-lg"></i>
+      </div>
+      <p class="text-[#4d6485] text-sm">Select a guild from the left to view and edit its configuration.</p>
     </div>
     {% endif %}
   </div>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
 async function refreshModels() {
   const btn = document.getElementById('refresh-models-btn');
-  const originalContent = btn.innerHTML;
-  
-  // Show loading state
-  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Refreshing...';
+  if (!btn) return;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin" style="font-size:0.65rem;"></i> Refreshing…';
   btn.disabled = true;
-  
   try {
-    const response = await fetch('/api/refresh-models', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
-    
-    const result = await response.json();
-    
-    if (result.success) {
-      // Show success state briefly
-      btn.innerHTML = '<i class="fa fa-check"></i> Refreshed!';
-      btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
-      btn.classList.add('bg-green-600', 'hover:bg-green-700');
-      
-      // Reload the page after a short delay to show updated models
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
+    const res = await fetch('/api/refresh-models', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+    if (data.success) {
+      toast('Models refreshed successfully', 'success');
+      setTimeout(() => location.reload(), 900);
     } else {
-      // Show error state
-      btn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Error';
-      btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
-      btn.classList.add('bg-red-600', 'hover:bg-red-700');
-      
-      alert('Failed to refresh models: ' + result.message);
-      
-      // Reset button after delay
-      setTimeout(() => {
-        btn.innerHTML = originalContent;
-        btn.disabled = false;
-        btn.classList.remove('bg-red-600', 'hover:bg-red-700');
-        btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
-      }, 2000);
+      toast('Failed to refresh models: ' + data.message, 'error');
+      btn.innerHTML = orig; btn.disabled = false;
     }
-  } catch (error) {
-    // Show error state
-    btn.innerHTML = '<i class="fa fa-exclamation-triangle"></i> Error';
-    btn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
-    btn.classList.add('bg-red-600', 'hover:bg-red-700');
-    
-    alert('Failed to refresh models: ' + error.message);
-    
-    // Reset button after delay
-    setTimeout(() => {
-      btn.innerHTML = originalContent;
-      btn.disabled = false;
-      btn.classList.remove('bg-red-600', 'hover:bg-red-700');
-      btn.classList.add('bg-blue-600', 'hover:bg-blue-700');
-    }, 2000);
+  } catch (e) {
+    toast('Error refreshing models: ' + e.message, 'error');
+    btn.innerHTML = orig; btn.disabled = false;
   }
 }
-</script>
 
+// Intercept delete forms → custom confirm dialog
+document.querySelectorAll('form[data-confirm-msg]').forEach(form => {
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    showConfirmDialog(form.dataset.confirmMsg, () => form.submit());
+  });
+});
+
+// Show saved toast on page load if came from a save action
+const params = new URLSearchParams(location.search);
+if (params.get('saved') === '1') {
+  window.addEventListener('DOMContentLoaded', () => toast('Configuration saved', 'success'));
+}
+</script>
 {% endblock %}

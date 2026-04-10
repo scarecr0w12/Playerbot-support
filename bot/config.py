@@ -29,6 +29,13 @@ class Config:
         default_factory=lambda: os.getenv("LLM_API_KEY", "no-key-needed")
     )
 
+    # ── Bot-level system prompt (prepended to every guild's prompt) ──
+    # Set this in .env to enforce a foundation that cannot be overridden
+    # by per-guild settings.  Leave blank to use only the guild prompt.
+    system_prompt: str = field(
+        default_factory=lambda: os.getenv("SYSTEM_PROMPT", "")
+    )
+
     # ── GitHub integration ───────────────────────────────────────────
     github_token: str | None = field(
         default_factory=lambda: os.getenv("GITHUB_TOKEN")

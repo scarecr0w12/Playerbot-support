@@ -922,6 +922,7 @@ async def assistant_page(request: Request, guild_id: int | None = None):
     custom_functions: list[dict] = []
     listen_channels: list[dict[str, int | str]] = []
     channel_prompts: list[dict[str, int | str]] = []
+    prompt_templates: list[dict] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0}
     conversations = {"messages": 0, "users": 0, "channels": 0, "tokens": 0}
 
@@ -970,6 +971,12 @@ async def assistant_page(request: Request, guild_id: int | None = None):
             except ValueError:
                 continue
 
+        prompt_templates = await db_fetchall(
+            "SELECT id, name, content, created_by, created_at FROM prompt_templates WHERE guild_id = ? ORDER BY name",
+            (guild_id,),
+        )
+
+    _cfg = Config()
     return templates.TemplateResponse(request, "assistant.html", ctx({
         "guilds": guilds,
         "guild_id": guild_id,
@@ -978,6 +985,8 @@ async def assistant_page(request: Request, guild_id: int | None = None):
         "custom_functions": custom_functions,
         "listen_channels": listen_channels,
         "channel_prompts": channel_prompts,
+        "prompt_templates": prompt_templates,
+        "system_prompt": _cfg.system_prompt,
         "usage": usage,
         "conversations": conversations,
         "active_page": "assistant",
@@ -1088,6 +1097,71 @@ async def assistant_channel_prompt_delete(request: Request, guild_id: int = Form
         return r
     await require_guild_access(request, guild_id)
     await db_execute("DELETE FROM guild_config WHERE guild_id = ? AND key = ?", (guild_id, f"channel_prompt_{channel_id}"))
+    return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
+
+
+@app.post("/assistant/templates/save")
+async def assistant_template_save(
+    request: Request,
+    guild_id: int = Form(...),
+    name: str = Form(...),
+    content: str = Form(...),
+):
+    if r := auth_redirect(request):
+        return r
+    await require_guild_access(request, guild_id)
+    user_id = request.session.get("user", {}).get("id", 0)
+    await db_execute(
+        "INSERT INTO prompt_templates (guild_id, name, content, created_by) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(guild_id, name) DO UPDATE SET content = excluded.content, created_by = excluded.created_by, created_at = datetime('now')",
+        (guild_id, name.strip(), content.strip(), user_id),
+    )
+    return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
+
+
+@app.post("/assistant/templates/apply")
+async def assistant_template_apply(request: Request, guild_id: int = Form(...), name: str = Form(...)):
+    if r := auth_redirect(request):
+        return r
+    await require_guild_access(request, guild_id)
+    await db_execute(
+        "INSERT INTO guild_config (guild_id, key, value) VALUES (?, 'assistant_active_template', ?) "
+        "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+        (guild_id, name),
+    )
+    return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
+
+
+@app.post("/assistant/templates/clear")
+async def assistant_template_clear(request: Request, guild_id: int = Form(...)):
+    if r := auth_redirect(request):
+        return r
+    await require_guild_access(request, guild_id)
+    await db_execute(
+        "INSERT INTO guild_config (guild_id, key, value) VALUES (?, 'assistant_active_template', '') "
+        "ON CONFLICT(guild_id, key) DO UPDATE SET value = ''",
+        (guild_id,),
+    )
+    return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
+
+
+@app.post("/assistant/templates/delete")
+async def assistant_template_delete(request: Request, guild_id: int = Form(...), template_id: int = Form(...)):
+    if r := auth_redirect(request):
+        return r
+    await require_guild_access(request, guild_id)
+    tpl = await db_fetchone("SELECT name FROM prompt_templates WHERE id = ? AND guild_id = ?", (template_id, guild_id))
+    if tpl:
+        await db_execute("DELETE FROM prompt_templates WHERE id = ? AND guild_id = ?", (template_id, guild_id))
+        active = await db_fetchone(
+            "SELECT value FROM guild_config WHERE guild_id = ? AND key = 'assistant_active_template'",
+            (guild_id,),
+        )
+        if active and active["value"] == tpl["name"]:
+            await db_execute(
+                "UPDATE guild_config SET value = '' WHERE guild_id = ? AND key = 'assistant_active_template'",
+                (guild_id,),
+            )
     return RedirectResponse(f"/assistant?guild_id={guild_id}", status_code=302)
 
 

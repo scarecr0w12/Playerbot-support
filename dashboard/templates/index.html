@@ -4,87 +4,126 @@
 
 {% block content %}
 <!-- Stat cards -->
-<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
-  {% set stat_cards = [
-    ("fa-gavel",              "Mod Cases",       stats.total_cases,      "#5865F2", "/moderation"),
-    ("fa-ticket",             "Open Tickets",    stats.open_tickets,     "#0ea5e9", "/tickets"),
-    ("fa-triangle-exclamation","Active Warnings", stats.active_warnings, "#f59e0b", "/warnings"),
-    ("fa-flag",               "Open Reports",    stats.open_reports,     "#ef4444", "/reports"),
-    ("fa-gift",               "Live Giveaways",  stats.active_giveaways, "#a855f7", "/giveaways"),
-    ("fa-coins",              "Economy Accounts",stats.economy_accounts, "#10b981", "/economy"),
-    ("fa-chart-line",         "Level Entries",   stats.level_entries,    "#06b6d4", "/levels"),
-    ("fa-terminal",           "Custom Commands", stats.custom_commands,  "#f97316", "/custom-commands"),
-    ("fa-server",             "Guilds Tracked",  stats.guild_count,      "#6366f1", "/config"),
-  ] %}
-  {% for icon, label, value, color, href in stat_cards %}
-  <a href="{{ href }}" class="card p-4 flex items-center gap-3 hover:border-gray-700 transition-colors group" style="text-decoration:none;">
-    <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background:{{ color }}22;">
-      <i class="fa {{ icon }}" style="color:{{ color }};font-size:1rem;"></i>
+{% set stat_cards = [
+  ("fa-gavel",               "Mod Cases",        stats.total_cases,      "#5865F2", "/moderation",     "total_cases"),
+  ("fa-ticket",              "Open Tickets",     stats.open_tickets,     "#0ea5e9", "/tickets",        "open_tickets"),
+  ("fa-triangle-exclamation","Active Warnings",  stats.active_warnings,  "#f59e0b", "/warnings",       "active_warnings"),
+  ("fa-flag",                "Open Reports",     stats.open_reports,     "#ef4444", "/reports",        "open_reports"),
+  ("fa-gift",                "Live Giveaways",   stats.active_giveaways, "#a855f7", "/giveaways",      "active_giveaways"),
+  ("fa-coins",               "Economy Accounts", stats.economy_accounts, "#10b981", "/economy",        "economy_accounts"),
+  ("fa-chart-line",          "Level Entries",    stats.level_entries,    "#06b6d4", "/levels",         "level_entries"),
+  ("fa-terminal",            "Custom Commands",  stats.custom_commands,  "#f97316", "/custom-commands","custom_commands"),
+  ("fa-server",              "Guilds Tracked",   stats.guild_count,      "#6366f1", "/config",         "guild_count"),
+] %}
+<div class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 mb-6">
+  {% for icon, label, value, color, href, stat_key in stat_cards %}
+  <a href="{{ href }}" class="card p-4 flex flex-col gap-2.5 hover:border-[rgba(148,163,184,0.25)] transition-colors group" style="text-decoration:none;">
+    <div class="flex items-center justify-between">
+      <div class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style="background:{{ color }}1a;">
+        <i class="fa {{ icon }}" style="color:{{ color }};font-size:0.85rem;"></i>
+      </div>
+      <i class="fa fa-arrow-up-right-from-square text-[#2d4060] group-hover:text-[#4d6485] transition-colors" style="font-size:0.65rem;"></i>
     </div>
     <div>
-      <p class="text-2xl font-bold text-white leading-tight">{{ value }}</p>
-      <p class="text-xs text-gray-400">{{ label }}</p>
+      <p class="text-xl font-bold text-white leading-tight tracking-tight" data-stat="{{ stat_key }}">{{ value }}</p>
+      <p class="text-[0.72rem] text-[#4d6485] mt-0.5">{{ label }}</p>
     </div>
   </a>
   {% endfor %}
 </div>
 
-<div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-5">
   <!-- Recent mod cases -->
-  <div class="card xl:col-span-2">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-      <h2 class="font-semibold text-white">Recent Mod Cases</h2>
-      <a href="/moderation" class="text-xs text-[#5865F2] hover:underline">View all →</a>
+  <div class="card xl:col-span-2 flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3.5 border-b border-[rgba(148,163,184,0.08)]">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-md bg-[#5865F2]/15 flex items-center justify-center">
+          <i class="fa fa-gavel text-[#5865F2]" style="font-size:0.65rem;"></i>
+        </div>
+        <h2 class="font-semibold text-white text-sm">Recent Mod Cases</h2>
+      </div>
+      <a href="/moderation" class="flex items-center gap-1 text-[0.72rem] text-[#4a6aaa] hover:text-[#7ea8ff] transition-colors" style="text-decoration:none;">
+        View all <i class="fa fa-arrow-right" style="font-size:0.6rem;"></i>
+      </a>
     </div>
-    <div class="overflow-x-auto">
+    <div class="overflow-x-auto flex-1">
       <table class="w-full text-sm">
         <thead>
-          <tr class="text-left text-gray-500 text-xs">
-            <th class="px-5 py-3 font-medium">#</th>
-            <th class="px-5 py-3 font-medium">Action</th>
-            <th class="px-5 py-3 font-medium">User ID</th>
-            <th class="px-5 py-3 font-medium">Reason</th>
-            <th class="px-5 py-3 font-medium">When</th>
+          <tr style="border-bottom:1px solid rgba(148,163,184,0.08);">
+            <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">#</th>
+            <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">Action</th>
+            <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">User</th>
+            <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">Reason</th>
+            <th class="px-5 py-2.5 text-left text-[0.68rem] font-semibold text-[#2d4060] uppercase tracking-wider">When</th>
           </tr>
         </thead>
         <tbody>
           {% for case in recent_cases %}
           <tr class="table-row">
-            <td class="px-5 py-3 text-gray-400 font-mono">{{ case.id }}</td>
+            <td class="px-5 py-3 text-[#3d5272] font-mono text-xs">#{{ case.id }}</td>
             <td class="px-5 py-3">
-              {% set action_colors = {"warn": "#f59e0b", "mute": "#6366f1", "kick": "#f97316", "ban": "#ef4444", "unban": "#10b981", "unmute": "#06b6d4"} %}
-              <span class="badge" style="background:{{ action_colors.get(case.action, '#6b7280') }}22;color:{{ action_colors.get(case.action, '#9ca3af') }};">{{ case.action }}</span>
+              {% set action_cfg = {
+                "warn":   ("#f59e0b", "fa-triangle-exclamation"),
+                "mute":   ("#6366f1", "fa-microphone-slash"),
+                "kick":   ("#f97316", "fa-person-walking-arrow-right"),
+                "ban":    ("#ef4444", "fa-ban"),
+                "unban":  ("#10b981", "fa-check-circle"),
+                "unmute": ("#06b6d4", "fa-microphone")
+              } %}
+              {% set cfg = action_cfg.get(case.action, ("#6b7280", "fa-circle")) %}
+              <span class="badge" style="background:{{ cfg[0] }}1a;color:{{ cfg[0] }};border:1px solid {{ cfg[0] }}30;">
+                <i class="fa {{ cfg[1] }}" style="font-size:0.6rem;margin-right:0.3rem;"></i>{{ case.action }}
+              </span>
             </td>
-            <td class="px-5 py-3 text-gray-300 font-mono text-xs">{{ case.user_id }}</td>
-            <td class="px-5 py-3 text-gray-400 max-w-[200px] truncate">{{ case.reason or "—" }}</td>
-            <td class="px-5 py-3 text-gray-500 text-xs">{{ case.created_at[:16] if case.created_at else "—" }}</td>
+            <td class="px-5 py-3 text-[#8ab0d8] font-mono text-xs">{{ case.user_id }}</td>
+            <td class="px-5 py-3 text-[#4d6485] max-w-[200px] truncate text-xs">{{ case.reason or "—" }}</td>
+            <td class="px-5 py-3 text-[#2d4060] text-xs whitespace-nowrap">{{ case.created_at[:16] if case.created_at else "—" }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="5" class="px-5 py-8 text-center text-gray-500">No cases yet</td></tr>
+          <tr>
+            <td colspan="5" class="px-5 py-12 text-center">
+              <i class="fa fa-gavel text-2xl text-[#1e3050] mb-2 block"></i>
+              <p class="text-[#2d4060] text-sm">No mod cases yet</p>
+            </td>
+          </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- Guilds -->
-  <div class="card">
-    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-      <h2 class="font-semibold text-white">Tracked Guilds</h2>
-      <a href="/config" class="text-xs text-[#5865F2] hover:underline">Config →</a>
+  <!-- Guilds panel -->
+  <div class="card flex flex-col">
+    <div class="flex items-center justify-between px-5 py-3.5 border-b border-[rgba(148,163,184,0.08)]">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded-md bg-[#6366f1]/15 flex items-center justify-center">
+          <i class="fa fa-server text-[#6366f1]" style="font-size:0.65rem;"></i>
+        </div>
+        <h2 class="font-semibold text-white text-sm">Tracked Guilds</h2>
+      </div>
+      <a href="/config" class="flex items-center gap-1 text-[0.72rem] text-[#4a6aaa] hover:text-[#7ea8ff] transition-colors" style="text-decoration:none;">
+        Config <i class="fa fa-arrow-right" style="font-size:0.6rem;"></i>
+      </a>
     </div>
-    <div class="px-5 py-3 space-y-2">
+    <div class="px-3 py-2.5 space-y-1 flex-1 overflow-y-auto">
       {% for g in guilds %}
       <a href="/config?guild_id={{ g.guild_id }}"
-         class="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-800 transition-colors"
+         class="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[rgba(255,255,255,0.04)] transition-colors group"
          style="text-decoration:none;">
-        <div class="w-8 h-8 rounded-full bg-[#5865F2]/20 flex items-center justify-center flex-shrink-0">
-          <i class="fa fa-server text-[#5865F2] text-xs"></i>
+        <div class="w-7 h-7 rounded-lg bg-[#5865F2]/12 border border-[#5865F2]/20 flex items-center justify-center flex-shrink-0 group-hover:bg-[#5865F2]/20 transition-colors">
+          <i class="fa fa-server text-[#5865F2]" style="font-size:0.65rem;"></i>
         </div>
-        <span class="text-gray-300 text-sm font-mono">{{ g.guild_id }}</span>
+        <div class="flex-1 min-w-0">
+          <p class="text-[#8ab0d8] text-xs font-mono truncate">{{ g.guild_id }}</p>
+        </div>
+        <i class="fa fa-chevron-right text-[#1e3050] group-hover:text-[#3d5272] transition-colors" style="font-size:0.6rem;flex-shrink:0;"></i>
       </a>
       {% else %}
-      <p class="text-center text-gray-500 text-sm py-6">No guilds configured yet</p>
+      <div class="py-10 text-center">
+        <i class="fa fa-server text-2xl text-[#1e3050] mb-2 block"></i>
+        <p class="text-[#2d4060] text-sm">No guilds configured</p>
+        <a href="/config" class="text-[0.75rem] text-[#4a6aaa] hover:text-[#7ea8ff] mt-1 block" style="text-decoration:none;">Add a guild →</a>
+      </div>
       {% endfor %}
     </div>
   </div>

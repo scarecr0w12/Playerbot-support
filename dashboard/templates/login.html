@@ -1,42 +1,111 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-gray-950">
+<html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Login — Bot Dashboard</title>
+  <title>Sign In — Bot Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body {
+      background:
+        radial-gradient(ellipse at top left,    rgba(79,124,255,0.18) 0%, transparent 42%),
+        radial-gradient(ellipse at bottom right, rgba(31,183,166,0.14) 0%, transparent 40%),
+        radial-gradient(ellipse at center,       rgba(20,30,55,0.6) 0%, transparent 65%),
+        linear-gradient(160deg, #06101e 0%, #08121f 50%, #060e18 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    @keyframes float-in { from { opacity:0; transform: translateY(18px) scale(0.97); } to { opacity:1; transform: translateY(0) scale(1); } }
+    .login-card { animation: float-in 0.45s cubic-bezier(.22,1,.36,1) both; }
+    .discord-btn {
+      display: flex; width: 100%; align-items: center; justify-content: center;
+      gap: 0.6rem; padding: 0.8rem 1rem;
+      background: linear-gradient(135deg, #5865F2, #4a58e0 60%, #3f4ed0);
+      color: #fff; font-size: 0.9rem; font-weight: 600; border-radius: 0.65rem;
+      border: 1px solid rgba(137,160,255,0.3); text-decoration: none; cursor: pointer;
+      transition: filter 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+      box-shadow: 0 8px 28px rgba(88,101,242,0.36);
+    }
+    .discord-btn:hover { filter: brightness(1.08); transform: translateY(-1px); box-shadow: 0 14px 36px rgba(88,101,242,0.44); }
+    .discord-btn:active { transform: translateY(0); filter: brightness(0.96); }
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-thumb { background: #2d3f56; border-radius: 999px; }
+  </style>
 </head>
-<body class="h-full bg-gray-950 flex items-center justify-center">
-  <div class="w-full max-w-sm mx-auto px-4">
+<body>
+  <div class="login-card w-full max-w-sm mx-auto px-4">
+
+    <!-- Header -->
     <div class="text-center mb-8">
-      <div class="w-16 h-16 rounded-2xl bg-[#5865F2] flex items-center justify-center mx-auto mb-4">
-        <i class="fa-brands fa-discord text-white text-3xl"></i>
+      <div class="relative inline-flex mb-5">
+        <div class="w-16 h-16 rounded-2xl bg-[#5865F2] flex items-center justify-center shadow-[0_12px_32px_rgba(88,101,242,0.45)]">
+          <i class="fa-brands fa-discord text-white" style="font-size:1.75rem;"></i>
+        </div>
+        <span class="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full border-2 border-[#06101e] flex items-center justify-center">
+          <i class="fa fa-check text-white" style="font-size:0.55rem;"></i>
+        </span>
       </div>
-      <h1 class="text-2xl font-bold text-white">Bot Dashboard</h1>
-      <p class="text-gray-400 text-sm mt-1">Sign in with Discord to manage the servers you administer</p>
+      <h1 class="text-2xl font-bold text-white tracking-tight">Bot Dashboard</h1>
+      <p class="text-[#4d6485] text-sm mt-1.5 leading-relaxed">Sign in with Discord to manage<br>your server configuration</p>
     </div>
 
+    <!-- Error -->
     {% if error %}
-    <div class="mb-4 flex items-center gap-2 bg-red-900/30 border border-red-700/50 text-red-400 text-sm rounded-lg px-4 py-3">
-      <i class="fa fa-circle-exclamation"></i> {{ error }}
+    <div class="mb-4 flex items-start gap-2.5 bg-red-900/20 border border-red-700/40 text-red-300 text-sm rounded-xl px-4 py-3">
+      <i class="fa fa-circle-exclamation mt-0.5 flex-shrink-0"></i>
+      <span>{{ error }}</span>
     </div>
     {% endif %}
 
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
+    <!-- Card -->
+    <div style="background:linear-gradient(180deg,rgba(15,23,38,0.96),rgba(10,16,28,0.99));border:1px solid rgba(148,163,184,0.13);border-radius:1.1rem;padding:1.75rem;box-shadow:0 24px 60px rgba(0,0,0,0.5);">
+
       {% if oauth_ready %}
-      <a href="{{ discord_login_url }}" style="display:flex;width:100%;align-items:center;justify-content:center;gap:0.5rem;padding:0.75rem 1rem;background:#5865F2;color:#fff;font-size:0.875rem;font-weight:600;border-radius:0.5rem;border:none;cursor:pointer;text-decoration:none;">
-        <i class="fa-brands fa-discord"></i> Continue With Discord
+      <a href="{{ discord_login_url }}" class="discord-btn">
+        <i class="fa-brands fa-discord" style="font-size:1.05rem;"></i>
+        Continue with Discord
       </a>
-      <p class="text-xs text-gray-500 leading-5">
-        Server admins only see dashboards for guilds they manage. The configured bot owner{% if bot_owner_discord_id %} ({{ bot_owner_discord_id }}){% endif %} can access every guild dashboard.
-      </p>
+
+      <div style="display:flex;align-items:center;gap:0.75rem;margin:1.25rem 0;">
+        <div style="flex:1;height:1px;background:rgba(148,163,184,0.12);"></div>
+        <span style="color:#2d4060;font-size:0.72rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;">Access</span>
+        <div style="flex:1;height:1px;background:rgba(148,163,184,0.12);"></div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:0.6rem;">
+        <div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.65rem 0.75rem;border-radius:0.65rem;background:rgba(79,124,255,0.07);border:1px solid rgba(79,124,255,0.14);">
+          <i class="fa fa-user-shield" style="color:#5a7aff;font-size:0.8rem;margin-top:0.15rem;flex-shrink:0;"></i>
+          <p style="color:#8ab0d8;font-size:0.78rem;line-height:1.45;">Server admins can manage guilds they have Administrator permission in.</p>
+        </div>
+        {% if bot_owner_discord_id %}
+        <div style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.65rem 0.75rem;border-radius:0.65rem;background:rgba(31,183,166,0.07);border:1px solid rgba(31,183,166,0.14);">
+          <i class="fa fa-crown" style="color:#1fb7a6;font-size:0.8rem;margin-top:0.15rem;flex-shrink:0;"></i>
+          <p style="color:#8ab0d8;font-size:0.78rem;line-height:1.45;">Bot owner <code style="background:rgba(255,255,255,0.08);padding:0.1rem 0.35rem;border-radius:0.3rem;font-size:0.75rem;color:#c0d4f0;">{{ bot_owner_discord_id }}</code> has full access to all guilds.</p>
+        </div>
+        {% endif %}
+      </div>
+
       {% else %}
-      <div class="rounded-lg border border-amber-700/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
-        Discord OAuth is not configured yet. Set <strong>DISCORD_CLIENT_ID</strong>, <strong>DISCORD_CLIENT_SECRET</strong>, <strong>DISCORD_REDIRECT_URI</strong>, and <strong>BOT_OWNER_DISCORD_ID</strong> in your environment.
+      <div style="border-radius:0.75rem;border:1px solid rgba(245,158,11,0.3);background:rgba(245,158,11,0.08);padding:1rem 1.1rem;">
+        <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:0.6rem;">
+          <i class="fa fa-triangle-exclamation" style="color:#fbbf24;font-size:0.85rem;"></i>
+          <span style="color:#fcd34d;font-size:0.85rem;font-weight:600;">OAuth not configured</span>
+        </div>
+        <p style="color:#a38040;font-size:0.8rem;line-height:1.5;">Set the following environment variables to enable Discord login:</p>
+        <div style="margin-top:0.65rem;display:flex;flex-direction:column;gap:0.3rem;">
+          {% for var in ['DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'DISCORD_REDIRECT_URI', 'BOT_OWNER_DISCORD_ID'] %}
+          <code style="display:block;background:rgba(0,0,0,0.3);border:1px solid rgba(245,158,11,0.15);border-radius:0.4rem;padding:0.25rem 0.6rem;font-size:0.75rem;color:#fcd34d;">{{ var }}</code>
+          {% endfor %}
+        </div>
       </div>
       {% endif %}
     </div>
+
+    <p style="text-align:center;margin-top:1.25rem;color:#1e3050;font-size:0.72rem;">
+      Protected by Discord OAuth 2.0
+    </p>
   </div>
 </body>
 </html>

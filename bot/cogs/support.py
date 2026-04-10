@@ -217,7 +217,8 @@ class SupportCog(commands.Cog, name="Support"):
         self.db = db
         self.llm = llm
         self.qdrant: QdrantService = qdrant or QdrantService()
-        self.model_discovery = ModelDiscoveryService(Config())
+        self._config = Config()
+        self.model_discovery = ModelDiscoveryService(self._config)
         self._processing_messages: set[int] = set()
         # Context menu: right-click message → "Ask AI about this"
         self._ask_ctx = app_commands.ContextMenu(name="Ask AI", callback=self._ask_context_menu)
@@ -337,17 +338,36 @@ class SupportCog(commands.Cog, name="Support"):
         channel: discord.abc.Messageable | None,
         user: discord.User | discord.Member,
     ) -> str:
-        base = DEFAULTS["assistant_prompt"]
+        parts: list[str] = []
+
+        # Layer 1: bot-level system prompt from .env (always first, cannot be overridden)
+        if self._config.system_prompt:
+            parts.append(self._config.system_prompt)
+
+        # Layer 2: guild prompt — either active named template or the custom/default prompt
+        guild_prompt = ""
         if guild:
-            custom = await self.db.get_guild_config(guild.id, "assistant_prompt")
-            if custom:
-                base = custom
-            if channel:
-                chan_prompt = await self.db.get_guild_config(
-                    guild.id, f"channel_prompt_{getattr(channel, 'id', 0)}"
-                )
-                if chan_prompt:
-                    base += "\n\n" + chan_prompt
+            active_tpl = await self.db.get_guild_config(guild.id, "assistant_active_template")
+            if active_tpl:
+                row = await self.db.get_prompt_template(guild.id, active_tpl)
+                if row:
+                    guild_prompt = row["content"]
+            if not guild_prompt:
+                guild_prompt = await self.db.get_guild_config(guild.id, "assistant_prompt") or DEFAULTS["assistant_prompt"]
+        else:
+            guild_prompt = DEFAULTS["assistant_prompt"]
+        if guild_prompt:
+            parts.append(guild_prompt)
+
+        # Layer 3: channel-specific prompt addition
+        if guild and channel:
+            chan_prompt = await self.db.get_guild_config(
+                guild.id, f"channel_prompt_{getattr(channel, 'id', 0)}"
+            )
+            if chan_prompt:
+                parts.append(chan_prompt)
+
+        base = "\n\n".join(parts)
         ctx = {"bot": self.bot, "guild": guild, "channel": channel, "user": user}
         return _fill_placeholders(base, ctx)
 
@@ -1274,6 +1294,64 @@ class SupportCog(commands.Cog, name="Support"):
         msg = f"Channel prompt set for {channel.mention}." if prompt else f"Channel prompt cleared for {channel.mention}."
         await interaction.response.send_message(msg, ephemeral=True)
 
+    @assist_group.command(name="templatesave", description="Save or update a named prompt template")
+    @app_commands.describe(name="Template name (e.g. 'support', 'moderation')", prompt="Full prompt text for this template")
+    @app_commands.default_permissions(manage_guild=True)
+    async def assist_template_save(self, interaction: discord.Interaction, name: str, prompt: str) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        inserted = await self.db.save_prompt_template(guild_id, name, prompt, interaction.user.id)
+        verb = "created" if inserted else "updated"
+        await interaction.response.send_message(f"✅ Template **{name}** {verb}.", ephemeral=True)
+
+    @assist_group.command(name="templatelist", description="List saved prompt templates")
+    @app_commands.default_permissions(manage_guild=True)
+    async def assist_template_list(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        templates = await self.db.list_prompt_templates(guild_id)
+        active = await self.db.get_guild_config(guild_id, "assistant_active_template") or ""
+        if not templates:
+            await interaction.response.send_message("No prompt templates saved yet.", ephemeral=True)
+            return
+        em = discord.Embed(title="📋 Prompt Templates", color=discord.Color.blurple())
+        for t in templates:
+            marker = " ✅ active" if t["name"] == active else ""
+            em.add_field(
+                name=f"{t['name']}{marker}",
+                value=(t["content"][:120] + "…") if len(t["content"]) > 120 else t["content"],
+                inline=False,
+            )
+        await interaction.response.send_message(embed=em, ephemeral=True)
+
+    @assist_group.command(name="templateapply", description="Switch the active prompt template (or clear to use manual prompt)")
+    @app_commands.describe(name="Template name to activate, or leave blank to clear")
+    @app_commands.default_permissions(manage_guild=True)
+    async def assist_template_apply(self, interaction: discord.Interaction, name: str = "") -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        if name:
+            row = await self.db.get_prompt_template(guild_id, name)
+            if not row:
+                await interaction.response.send_message(f"No template named **{name}** found.", ephemeral=True)
+                return
+            await self.db.set_guild_config(guild_id, "assistant_active_template", name)
+            await interaction.response.send_message(f"✅ Active prompt template set to **{name}**.", ephemeral=True)
+        else:
+            await self.db.set_guild_config(guild_id, "assistant_active_template", "")
+            await interaction.response.send_message("Active template cleared — using manual assistant prompt.", ephemeral=True)
+
+    @assist_group.command(name="templatedelete", description="Delete a saved prompt template")
+    @app_commands.describe(name="Template name to delete")
+    @app_commands.default_permissions(manage_guild=True)
+    async def assist_template_delete(self, interaction: discord.Interaction, name: str) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        deleted = await self.db.delete_prompt_template(guild_id, name)
+        if not deleted:
+            await interaction.response.send_message(f"No template named **{name}** found.", ephemeral=True)
+            return
+        active = await self.db.get_guild_config(guild_id, "assistant_active_template")
+        if active == name:
+            await self.db.set_guild_config(guild_id, "assistant_active_template", "")
+        await interaction.response.send_message(f"🗑️ Template **{name}** deleted.", ephemeral=True)
+
     @assist_group.command(name="functioncalls", description="Toggle function calling on/off")
     async def assist_functioncalls(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild.id  # type: ignore[union-attr]
@@ -1403,8 +1481,20 @@ class SupportCog(commands.Cog, name="Support"):
         rel = await self.db.get_guild_config(guild_id, "assistant_relatedness")
         em.add_field(name="Relatedness", value=rel or "0.3")
 
+        sys_prompt = self._config.system_prompt
+        em.add_field(
+            name="Bot system prompt",
+            value=(sys_prompt[:80] + "…") if len(sys_prompt) > 80 else (sys_prompt or "*(none)*"),
+            inline=False,
+        )
+
+        active_tpl = await self.db.get_guild_config(guild_id, "assistant_active_template") or ""
+        tpl_count = len(await self.db.list_prompt_templates(guild_id))
+        em.add_field(name="Active template", value=f"`{active_tpl}`" if active_tpl else "*(none — using manual prompt)*", inline=False)
+        em.add_field(name="Saved templates", value=str(tpl_count))
+
         prompt = await self.db.get_guild_config(guild_id, "assistant_prompt")
-        em.add_field(name="Custom prompt", value=(prompt[:100] + "…") if prompt else "Default (env)", inline=False)
+        em.add_field(name="Manual prompt", value=(prompt[:100] + "…") if prompt else "Default", inline=False)
 
         triggers = await self.db.get_triggers(guild_id)
         em.add_field(name="Triggers", value=", ".join(f"`{t}`" for t in triggers) if triggers else "None", inline=False)
