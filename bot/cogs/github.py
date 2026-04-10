@@ -26,12 +26,10 @@ RAG Ingestion (/github ingest)
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
-from urllib.parse import quote_plus
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 import discord
@@ -487,6 +485,102 @@ def _push_embed(repo: str, payload: dict, actor: dict | None = None) -> discord.
     em.description = "\n".join(lines) or _trunc(head.get("message", ""), 200)
     em.set_footer(text=f"{repo}  •  {len(commits)} commit(s)")
     return em
+
+
+async def _generate_commit_embeddings(cog: "GitHubCog", repo: str, commits: list[dict], branch: str, pusher_name: str) -> None:
+    """Generate detailed embeddings for commits in a push event."""
+    support_cog = cog.bot.get_cog("Support")
+    if support_cog is None:
+        return
+    
+    llm = getattr(support_cog, "llm", None)
+    if llm is None:
+        return
+    
+    repo_url = f"https://github.com/{repo}"
+    
+    for commit in commits:
+        sha = commit.get("id", "")
+        if not sha:
+            continue
+            
+        # Extract detailed commit information
+        author = commit.get("author", {})
+        author_name = author.get("name", "Unknown")
+        author_email = author.get("email", "")
+        committer = commit.get("committer", {})
+        committer_name = committer.get("name", author_name)
+        
+        message = commit.get("message", "")
+        url = commit.get("url", "")
+        timestamp = commit.get("timestamp", "")
+        
+        # Get file changes if available
+        added = commit.get("added", [])
+        removed = commit.get("removed", [])
+        modified = commit.get("modified", [])
+        
+        # Build detailed commit text for embedding
+        commit_details = []
+        commit_details.append(f"Commit: {sha[:7]}")
+        commit_details.append(f"Repository: {repo}")
+        commit_details.append(f"Branch: {branch}")
+        commit_details.append(f"Author: {author_name} ({author_email})")
+        commit_details.append(f"Committer: {committer_name}")
+        if timestamp:
+            commit_details.append(f"Timestamp: {timestamp}")
+        commit_details.append(f"Pushed by: {pusher_name}")
+        commit_details.append(f"URL: {url}")
+        commit_details.append("")
+        commit_details.append("Commit Message:")
+        commit_details.append(message)
+        
+        if added or removed or modified:
+            commit_details.append("")
+            commit_details.append("File Changes:")
+            if added:
+                commit_details.append(f"Added: {', '.join(added)}")
+            if removed:
+                commit_details.append(f"Removed: {', '.join(removed)}")
+            if modified:
+                commit_details.append(f"Modified: {', '.join(modified)}")
+        
+        text = "\n".join(commit_details)
+        label = f"commit:{repo}:{sha[:7]}"
+        
+        try:
+            from bot.llm_service import LLMService
+            vec = await llm.get_embedding(text[:8000])
+            if vec:
+                import struct
+                embedding_bytes = struct.pack(f"{len(vec)}f", *vec)
+                model = getattr(llm, "_embedding_model", None)
+                
+                # Store embedding for each guild that has this repo subscribed
+                subs = await cog.db.get_all_github_subscriptions()
+                guild_ids = {sub["guild_id"] for sub in subs if sub["repo"] == repo}
+                
+                for guild_id in guild_ids:
+                    added = await cog.db.add_embedding(
+                        guild_id=guild_id,
+                        name=label,
+                        text=text[:12000],
+                        embedding=embedding_bytes,
+                        model=model,
+                        source_url=url,
+                    )
+                    if not added:
+                        await cog.db.update_embedding(
+                            guild_id=guild_id,
+                            name=label,
+                            text=text[:12000],
+                            embedding=embedding_bytes,
+                            model=model,
+                            source_url=url,
+                        )
+                        
+        except Exception as exc:
+            logger.debug("Failed to generate embedding for commit %s: %s", sha[:7], exc)
 
 
 def _pr_embed(repo: str, payload: dict) -> discord.Embed | None:
@@ -996,6 +1090,14 @@ class GitHubCog(commands.Cog, name="GitHub"):
         if event_type == "PushEvent":
             embed = _push_embed(repo, payload, actor=event.get("actor"))
             event_key = "push"
+            
+            # Generate embeddings for commit details
+            commits = payload.get("commits") or []
+            if commits:
+                ref = payload.get("ref", "")
+                branch = ref.split("/")[-1] if "/" in ref else ref
+                pusher_name = payload.get("pusher", {}).get("name") or (event.get("actor") or {}).get("login", "someone")
+                await _generate_commit_embeddings(self, repo, commits, branch, pusher_name)
         elif event_type == "PullRequestEvent":
             embed = _pr_embed(repo, payload)
             event_key = "pull_request"

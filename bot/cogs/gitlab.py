@@ -178,6 +178,99 @@ def _push_embed(project: str, payload: dict, base_url: str) -> discord.Embed:
     return em
 
 
+async def _generate_commit_embeddings(cog: "GitLabCog", project: str, commits: list[dict], branch: str, pusher: str, base_url: str) -> None:
+    """Generate detailed embeddings for commits in a push event."""
+    support_cog = cog.bot.get_cog("Support")
+    if support_cog is None:
+        return
+    
+    llm = getattr(support_cog, "llm", None)
+    if llm is None:
+        return
+    
+    project_url = f"{base_url}/{project}"
+    
+    for commit in commits:
+        sha = commit.get("id", "")
+        if not sha:
+            continue
+            
+        # Extract detailed commit information
+        author = commit.get("author", {})
+        author_name = author.get("name", "Unknown")
+        author_email = author.get("email", "")
+        
+        message = commit.get("message", "")
+        url = commit.get("url", "")
+        timestamp = commit.get("timestamp", "")
+        
+        # Get file changes if available
+        added = commit.get("added", [])
+        removed = commit.get("removed", [])
+        modified = commit.get("modified", [])
+        
+        # Build detailed commit text for embedding
+        commit_details = []
+        commit_details.append(f"Commit: {sha[:7]}")
+        commit_details.append(f"Project: {project}")
+        commit_details.append(f"Branch: {branch}")
+        commit_details.append(f"Author: {author_name} ({author_email})")
+        if timestamp:
+            commit_details.append(f"Timestamp: {timestamp}")
+        commit_details.append(f"Pushed by: {pusher}")
+        commit_details.append(f"URL: {url}")
+        commit_details.append("")
+        commit_details.append("Commit Message:")
+        commit_details.append(message)
+        
+        if added or removed or modified:
+            commit_details.append("")
+            commit_details.append("File Changes:")
+            if added:
+                commit_details.append(f"Added: {', '.join(added)}")
+            if removed:
+                commit_details.append(f"Removed: {', '.join(removed)}")
+            if modified:
+                commit_details.append(f"Modified: {', '.join(modified)}")
+        
+        text = "\n".join(commit_details)
+        label = f"commit:{project}:{sha[:7]}"
+        
+        try:
+            from bot.llm_service import LLMService
+            vec = await llm.get_embedding(text[:8000])
+            if vec:
+                import struct
+                embedding_bytes = struct.pack(f"{len(vec)}f", *vec)
+                model = getattr(llm, "_embedding_model", None)
+                
+                # Store embedding for each guild that has this project subscribed
+                subs = await cog.db.get_all_gitlab_subscriptions()
+                guild_ids = {sub["guild_id"] for sub in subs if sub["project"] == project}
+                
+                for guild_id in guild_ids:
+                    added = await cog.db.add_embedding(
+                        guild_id=guild_id,
+                        name=label,
+                        text=text[:12000],
+                        embedding=embedding_bytes,
+                        model=model,
+                        source_url=url,
+                    )
+                    if not added:
+                        await cog.db.update_embedding(
+                            guild_id=guild_id,
+                            name=label,
+                            text=text[:12000],
+                            embedding=embedding_bytes,
+                            model=model,
+                            source_url=url,
+                        )
+                        
+        except Exception as exc:
+            logger.debug("Failed to generate embedding for commit %s: %s", sha[:7], exc)
+
+
 def _mr_embed(project: str, payload: dict) -> discord.Embed | None:
     attrs = payload.get("object_attributes") or {}
     action = attrs.get("action", "")
@@ -347,6 +440,36 @@ class GitLabCog(commands.Cog, name="GitLab"):
             await interaction.followup.send(msg, ephemeral=True)
         else:
             await interaction.response.send_message(msg, ephemeral=True)
+    
+    async def _fetch_commit_details_for_push(self, project: str, commit_to: str, commits_count: int) -> list[dict]:
+        """Fetch detailed commit information for a push event."""
+        try:
+            encoded_project = _encoded_project(project)
+            # Get commits leading up to and including the latest commit
+            status, commits = await self.gl.get(f"/projects/{encoded_project}/repository/commits?ref_name={commit_to}&per_page={min(commits_count, 10)}")
+            if status != 200 or not isinstance(commits, list):
+                return []
+            
+            return commits
+            
+        except Exception as exc:
+            logger.debug("Failed to fetch commit details for push to %s: %s", project, exc)
+            return []
+    
+    async def _fetch_and_embed_commit_details(self, project: str, commit_sha: str, branch: str, pusher: str) -> None:
+        """Fetch detailed commit information from GitLab API and generate embeddings."""
+        try:
+            encoded_project = _encoded_project(project)
+            status, commit_data = await self.gl.get(f"/projects/{encoded_project}/repository/commits/{commit_sha}")
+            if status != 200 or not isinstance(commit_data, dict):
+                return
+            
+            # Convert to format expected by embedding function
+            commits = [commit_data]
+            await _generate_commit_embeddings(self, project, commits, branch, pusher, self._base_url)
+            
+        except Exception as exc:
+            logger.debug("Failed to fetch commit details for %s: %s", commit_sha[:7], exc)
 
     async def _get_default_project(self, guild_id: int | None) -> str | None:
         if guild_id is None:
@@ -447,6 +570,10 @@ class GitLabCog(commands.Cog, name="GitLab"):
             author = event.get("author") or {}
             pusher = author.get("username") or author.get("name") or "someone"
             project_url = f"{self._base_url}/{project}"
+            
+            # Fetch detailed commit information for the push
+            commits = await self._fetch_commit_details_for_push(project, commit_to, commits_count)
+            
             em = discord.Embed(
                 title=f"📦 Push to `{project}` on `{ref}`",
                 url=f"{project_url}/-/commits/{ref}",
@@ -454,11 +581,33 @@ class GitLabCog(commands.Cog, name="GitLab"):
                 timestamp=datetime.now(timezone.utc),
             )
             em.set_author(name=pusher)
-            sha = commit_to[:7] if commit_to else ""
-            em.description = f"[`{sha}`]({project_url}/-/commit/{commit_to}) {_trunc(commit_title, 72)}" if sha else _trunc(commit_title, 120)
+            
+            # Display commit details
+            if commits:
+                lines = []
+                for commit in commits[:5]:  # Show up to 5 commits
+                    sha = commit.get("id", "")[:7]
+                    message = commit.get("message", "")
+                    first_line = message.splitlines()[0] if message else "No message"
+                    url = commit.get("web_url", "")
+                    lines.append(f"[`{sha}`]({url}) {_trunc(first_line, 72)}")
+                
+                if len(commits) > 5:
+                    lines.append(f"…and {len(commits) - 5} more")
+                
+                em.description = "\n".join(lines)
+            else:
+                # Fallback to basic info if commit fetch failed
+                sha = commit_to[:7] if commit_to else ""
+                em.description = f"[`{sha}`]({project_url}/-/commit/{commit_to}) {_trunc(commit_title, 72)}" if sha else _trunc(commit_title, 120)
+            
             em.set_footer(text=f"{project}  •  {commits_count} commit(s)")
             embed = em
             event_key = "push"
+            
+            # Generate embeddings for all commits
+            if commits:
+                await _generate_commit_embeddings(self, project, commits, ref, pusher, self._base_url)
 
         elif target_type == "mergerequest":
             action = action_name
