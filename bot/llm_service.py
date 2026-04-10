@@ -242,6 +242,25 @@ def _execute_builtin_tool(name: str, arguments: dict[str, Any]) -> str:
     return f"Unknown tool: {name}"
 
 
+def _execute_custom_function(name: str, code: str, arguments: dict[str, Any]) -> str:
+    """Execute a guild-defined custom function and return a string result.
+
+    The code must define a function with the same *name*.  It is called with
+    keyword arguments matching the schema declared for that function.
+    """
+    try:
+        namespace: dict[str, Any] = {}
+        exec(compile(code, f"<custom_fn:{name}>", "exec"), namespace)  # noqa: S102
+        fn = namespace.get(name)
+        if not callable(fn):
+            return f"[Custom function '{name}' did not define a callable with that name]"
+        result = fn(**arguments)
+        return str(result) if result is not None else "(no output)"
+    except Exception as exc:
+        logger.warning("Custom function '%s' raised: %s", name, exc, exc_info=True)
+        return f"[Custom function error: {exc}]"
+
+
 # ---------------------------------------------------------------------------
 # Main service
 # ---------------------------------------------------------------------------
@@ -324,6 +343,7 @@ class LLMService:
         max_tool_rounds: int = 5,
         mcp_manager: "MCPManager | None" = None,
         guild_id: int = 0,
+        custom_functions: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Send a chat completion request and handle tool calls.
 
@@ -353,8 +373,10 @@ class LLMService:
         all_tools = list(BUILTIN_TOOLS) if tools_allowed_for_model else []
         if tools and tools_allowed_for_model:
             all_tools.extend(tools)
-        if mcp_manager and tools_allowed_for_model:
-            all_tools.extend(mcp_manager.get_tools_for_guild(guild_id))
+        if mcp_manager:
+            mcp_tools = mcp_manager.get_tools_for_guild(guild_id)
+            if mcp_tools:
+                all_tools.extend(mcp_tools)
 
         total_prompt_tokens = 0
         total_completion_tokens = 0
@@ -431,6 +453,8 @@ class LLMService:
 
                 if mcp_manager and mcp_manager.is_mcp_tool(fn_name):
                     result = await mcp_manager.call_tool(guild_id, fn_name, fn_args)
+                elif custom_functions and fn_name in custom_functions:
+                    result = _execute_custom_function(fn_name, custom_functions[fn_name], fn_args)
                 else:
                     result = _execute_builtin_tool(fn_name, fn_args)
 

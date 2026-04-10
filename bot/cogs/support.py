@@ -559,6 +559,7 @@ class SupportCog(commands.Cog, name="Support"):
         # Function calling tools
         function_calling_enabled = bool(guild and await self._function_calling_enabled(guild_id))
         tools = None
+        custom_fn_code: dict[str, str] = {}
         if function_calling_enabled:
             custom_fns = await self.db.get_enabled_functions(guild_id)
             tools_list: list[dict] = []
@@ -571,6 +572,7 @@ class SupportCog(commands.Cog, name="Support"):
                         "parameters": json.loads(fn["parameters"]),
                     },
                 })
+                custom_fn_code[fn["name"]] = fn["code"]
             if tools_list:
                 tools = tools_list
 
@@ -589,6 +591,7 @@ class SupportCog(commands.Cog, name="Support"):
             allow_tools=function_calling_enabled,
             mcp_manager=self.mcp_manager,
             guild_id=guild_id,
+            custom_functions=custom_fn_code or None,
         )
 
         # Store assistant reply
