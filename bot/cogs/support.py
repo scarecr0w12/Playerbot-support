@@ -1240,6 +1240,10 @@ class SupportCog(commands.Cog, name="Support"):
         name="assistant", description="Configure the AI assistant",
         default_permissions=discord.Permissions(manage_guild=True),
     )
+    template_group = app_commands.Group(
+        name="template", description="Manage named prompt templates",
+        parent=assist_group,
+    )
 
     @assist_group.command(name="toggle", description="Enable or disable the assistant")
     async def assist_toggle(self, interaction: discord.Interaction) -> None:
@@ -1294,17 +1298,15 @@ class SupportCog(commands.Cog, name="Support"):
         msg = f"Channel prompt set for {channel.mention}." if prompt else f"Channel prompt cleared for {channel.mention}."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @assist_group.command(name="templatesave", description="Save or update a named prompt template")
+    @template_group.command(name="save", description="Save or update a named prompt template")
     @app_commands.describe(name="Template name (e.g. 'support', 'moderation')", prompt="Full prompt text for this template")
-    @app_commands.default_permissions(manage_guild=True)
     async def assist_template_save(self, interaction: discord.Interaction, name: str, prompt: str) -> None:
         guild_id = interaction.guild.id  # type: ignore[union-attr]
         inserted = await self.db.save_prompt_template(guild_id, name, prompt, interaction.user.id)
         verb = "created" if inserted else "updated"
         await interaction.response.send_message(f"✅ Template **{name}** {verb}.", ephemeral=True)
 
-    @assist_group.command(name="templatelist", description="List saved prompt templates")
-    @app_commands.default_permissions(manage_guild=True)
+    @template_group.command(name="list", description="List saved prompt templates")
     async def assist_template_list(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild.id  # type: ignore[union-attr]
         templates = await self.db.list_prompt_templates(guild_id)
@@ -1322,9 +1324,8 @@ class SupportCog(commands.Cog, name="Support"):
             )
         await interaction.response.send_message(embed=em, ephemeral=True)
 
-    @assist_group.command(name="templateapply", description="Switch the active prompt template (or clear to use manual prompt)")
+    @template_group.command(name="apply", description="Switch the active prompt template (or clear to use manual prompt)")
     @app_commands.describe(name="Template name to activate, or leave blank to clear")
-    @app_commands.default_permissions(manage_guild=True)
     async def assist_template_apply(self, interaction: discord.Interaction, name: str = "") -> None:
         guild_id = interaction.guild.id  # type: ignore[union-attr]
         if name:
@@ -1338,9 +1339,8 @@ class SupportCog(commands.Cog, name="Support"):
             await self.db.set_guild_config(guild_id, "assistant_active_template", "")
             await interaction.response.send_message("Active template cleared — using manual assistant prompt.", ephemeral=True)
 
-    @assist_group.command(name="templatedelete", description="Delete a saved prompt template")
+    @template_group.command(name="delete", description="Delete a saved prompt template")
     @app_commands.describe(name="Template name to delete")
-    @app_commands.default_permissions(manage_guild=True)
     async def assist_template_delete(self, interaction: discord.Interaction, name: str) -> None:
         guild_id = interaction.guild.id  # type: ignore[union-attr]
         deleted = await self.db.delete_prompt_template(guild_id, name)
