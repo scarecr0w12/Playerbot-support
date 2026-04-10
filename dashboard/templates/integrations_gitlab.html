@@ -1,0 +1,454 @@
+{% extends "base.html" %}
+{% block title %}GitLab Integrations — Bot Dashboard{% endblock %}
+{% block header %}GitLab Integrations{% endblock %}
+
+{% block head_extra %}
+<style>
+  .integrations-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+  .integrations-sticky {
+    position: sticky;
+    top: 5.5rem;
+  }
+  .guild-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.9rem 1rem;
+    border-radius: 0.95rem;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(9, 16, 29, 0.72);
+    color: #dbe7ff;
+    text-decoration: none;
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .guild-tile:hover {
+    transform: translateY(-1px);
+    border-color: rgba(252, 109, 38, 0.32);
+    background: rgba(13, 22, 38, 0.9);
+  }
+  .guild-tile.active {
+    border-color: rgba(252, 109, 38, 0.36);
+    background: linear-gradient(135deg, rgba(252, 109, 38, 0.12), rgba(226, 67, 41, 0.10));
+  }
+  .empty-illustration {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 1rem;
+    background: rgba(148, 163, 184, 0.08);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+  }
+  .table-shell {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 27, 0.52);
+    overflow: hidden;
+  }
+  .copy-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(8, 15, 28, 0.62);
+    color: #cbd5e1;
+    font-size: 0.72rem;
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .copy-chip:hover {
+    transform: translateY(-1px);
+    border-color: rgba(252, 109, 38, 0.32);
+    background: rgba(15, 23, 42, 0.78);
+  }
+  .flash-banner {
+    border-radius: 1rem;
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+  }
+  .flash-banner.success {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(52, 211, 153, 0.24);
+    color: #d1fae5;
+  }
+  .flash-banner.info {
+    background: rgba(59, 130, 246, 0.08);
+    border-color: rgba(96, 165, 250, 0.24);
+    color: #dbeafe;
+  }
+  .flash-banner.error {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(251, 191, 36, 0.24);
+    color: #fef3c7;
+  }
+  .accordion-block {
+    border-radius: 1rem;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(9, 16, 29, 0.72);
+    overflow: hidden;
+  }
+  .accordion-block summary { list-style: none; }
+  .accordion-block summary::-webkit-details-marker { display: none; }
+  .accordion-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.25rem;
+    cursor: pointer;
+  }
+  .accordion-summary:hover { background: rgba(15, 23, 42, 0.42); }
+  .accordion-summary-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+  }
+  .accordion-chevron {
+    transition: transform 0.18s ease;
+    color: #94a3b8;
+  }
+  .accordion-block[open] .accordion-chevron { transform: rotate(180deg); }
+  .accordion-body { padding: 0 1.25rem 1.25rem; }
+  @media (max-width: 1279px) {
+    .integrations-layout { grid-template-columns: 1fr; }
+    .integrations-sticky { position: static; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set selected_guild = (guilds | selectattr('guild_id', 'equalto', guild_id) | list | first) if guild_id else none %}
+
+<div class="integrations-layout">
+  <!-- ── Sidebar ── -->
+  <aside class="integrations-sticky space-y-4">
+    <div class="card p-4 space-y-4">
+      <div>
+        <p class="text-xs uppercase tracking-[0.24em] text-orange-300/70">Workspace</p>
+        <h2 class="mt-2 text-lg font-semibold text-white">Choose a guild</h2>
+        <p class="mt-1 text-sm text-slate-400">Select a server to manage its GitLab subscriptions and settings.</p>
+      </div>
+
+      {% if guilds|length > 1 %}
+      <form method="get" action="/integrations/gitlab" class="field-stack">
+        <label for="guild-selector" class="text-xs text-slate-400">Guild</label>
+        <select id="guild-selector" name="guild_id" class="input" onchange="this.form.submit()">
+          <option value="" {% if not guild_id %}selected{% endif %} disabled>Choose a guild…</option>
+          {% for g in guilds %}
+          <option value="{{ g.guild_id }}" {% if guild_id == g.guild_id %}selected{% endif %}>{{ g.guild_name }} — {{ g.guild_id }}</option>
+          {% endfor %}
+        </select>
+      </form>
+
+      <div class="space-y-2 max-h-[22rem] overflow-y-auto pr-1">
+        {% for g in guilds %}
+        <a href="/integrations/gitlab?guild_id={{ g.guild_id }}" class="guild-tile {% if guild_id == g.guild_id %}active{% endif %}">
+          <span class="text-sm font-medium text-white">{{ g.guild_name }}</span>
+          <span class="flex items-center justify-between gap-2 text-xs font-mono text-slate-400">
+            <span>{{ g.guild_id }}</span>
+            <span class="copy-chip" data-copy-text="{{ g.guild_id }}" data-copy-label="Guild ID"><i class="fa fa-copy"></i> Copy</span>
+          </span>
+        </a>
+        {% endfor %}
+      </div>
+      {% elif guilds %}
+      <div class="guild-tile active">
+        <span class="text-sm font-medium text-white">{{ guilds[0].guild_name }}</span>
+        <span class="text-xs font-mono text-slate-400">{{ guilds[0].guild_id }}</span>
+      </div>
+      {% else %}
+      <div class="soft-panel p-5 text-center">
+        <div class="empty-illustration mx-auto mb-3"><i class="fa fa-server"></i></div>
+        <p class="text-sm text-slate-400">No guilds found for this account.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Token health -->
+    <div class="card p-4 space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <p class="text-xs uppercase tracking-[0.24em] text-slate-500">GitLab API</p>
+          <h3 class="mt-1 text-sm font-semibold text-white">Connection health</h3>
+        </div>
+        <span class="kbd-pill {{ 'bg-emerald-500/10 border-emerald-400/20 text-emerald-200' if gitlab_token_configured else 'bg-amber-500/10 border-amber-400/20 text-amber-200' }}">
+          <i class="fa {{ 'fa-circle-check' if gitlab_token_configured else 'fa-triangle-exclamation' }}"></i>
+          {{ 'Ready' if gitlab_token_configured else 'Limited' }}
+        </span>
+      </div>
+      <p class="text-sm {{ 'text-emerald-300' if gitlab_token_configured else 'text-amber-300' }}">
+        {{ 'Authenticated token configured.' if gitlab_token_configured else 'No GITLAB_TOKEN set. Project lookup and private repo monitoring will fail.' }}
+      </p>
+      <div class="soft-panel p-3 text-xs text-slate-400">
+        Instance: <span class="font-mono text-slate-200">{{ gitlab_url }}</span>
+      </div>
+    </div>
+
+    <!-- Nav links back to GitHub integrations -->
+    <div class="card p-4 space-y-2">
+      <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Other integrations</p>
+      <a href="/integrations{% if guild_id %}?guild_id={{ guild_id }}{% endif %}" class="flex items-center gap-2 text-sm text-slate-300 hover:text-white no-underline py-1">
+        <i class="fa fa-github w-4 text-center"></i> GitHub
+      </a>
+    </div>
+  </aside>
+
+  <!-- ── Main content ── -->
+  <div class="space-y-6 min-w-0">
+    {% if not guild_id %}
+    <section class="page-hero p-10 text-center">
+      <div class="empty-illustration mx-auto mb-4"><i class="fa fa-code-branch text-lg text-orange-400"></i></div>
+      <h2 class="text-2xl font-semibold text-white">Pick a guild to open its GitLab workspace</h2>
+      <p class="mt-3 text-sm text-slate-400 max-w-2xl mx-auto">Configure GitLab project subscriptions, set a default project, and review poll-state cursors for each Discord server.</p>
+    </section>
+    {% else %}
+
+    {% if flash %}
+    <div class="flash-msg flash-banner {{ flash.level if flash.level in ['success', 'info', 'error'] else 'info' }}">
+      <div class="flex items-start gap-3">
+        <i class="fa {% if flash.level == 'success' %}fa-circle-check{% elif flash.level == 'error' %}fa-triangle-exclamation{% else %}fa-circle-info{% endif %} mt-0.5"></i>
+        <p class="text-sm">{{ flash.message }}</p>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Hero -->
+    <section class="page-hero p-6 xl:p-8">
+      <div class="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
+        <div class="max-w-3xl">
+          <p class="text-xs uppercase tracking-[0.24em] text-orange-300/70">GitLab workspace</p>
+          <h2 class="mt-3 text-2xl xl:text-3xl font-semibold text-white">{{ selected_guild.guild_name if selected_guild else ('Guild ' ~ guild_id) }}</h2>
+          <p class="mt-2 text-sm text-slate-300">Manage how this server watches GitLab projects and posts activity to Discord.</p>
+          <div class="flex flex-wrap gap-3 mt-4">
+            <a href="#gl-settings" class="section-chip"><i class="fa fa-sliders"></i> Settings</a>
+            <a href="#gl-subscriptions" class="section-chip"><i class="fa fa-bell"></i> Subscriptions</a>
+            <a href="#gl-poll-state" class="section-chip"><i class="fa fa-wave-square"></i> Poll state</a>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 xl:min-w-[20rem]">
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Subscriptions</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ gl_subscriptions|length }}</p>
+            <p class="mt-1 text-xs text-slate-400">Projects broadcasting into Discord.</p>
+          </div>
+          <div class="stat-tile">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Poll state rows</p>
+            <p class="mt-2 text-2xl font-semibold text-white">{{ gl_poll_state|length }}</p>
+            <p class="mt-1 text-xs text-slate-400">Saved event cursors.</p>
+          </div>
+          <div class="stat-tile xl:col-span-2">
+            <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Default project</p>
+            <p class="mt-2 text-base font-semibold text-white break-all">{{ gl_default_project or 'Not set' }}</p>
+            {% if gl_default_project %}
+            <button type="button" class="copy-chip mt-1" data-copy-text="{{ gl_default_project }}" data-copy-label="Default project"><i class="fa fa-copy"></i> Copy</button>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="gl-settings" class="card p-5 xl:p-6 space-y-5">
+      <div>
+        <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Settings</p>
+        <h3 class="mt-2 text-xl font-semibold text-white">Default project</h3>
+        <p class="mt-2 text-sm text-slate-400 max-w-2xl">The default project is used by Discord slash commands when no project is specified (e.g. <code class="text-orange-300">/gitlab issue</code>, <code class="text-orange-300">/gitlab ingest</code>).</p>
+      </div>
+
+      <form method="post" action="/integrations/gitlab/default_project_save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <label class="field-stack md:col-span-2">
+          <span class="text-xs text-slate-400">Default GitLab project</span>
+          <input class="input" type="text" name="default_project" value="{{ gl_default_project }}" placeholder="namespace/project"/>
+          <span class="helper-text">Used as the fallback for all Discord GitLab commands in this server.</span>
+        </label>
+        <button class="btn-primary" type="submit"><i class="fa fa-save"></i> Save default project</button>
+      </form>
+    </section>
+
+    <!-- Subscriptions -->
+    <details id="gl-subscriptions" class="accordion-block" {% if not gl_subscriptions %}open{% endif %}>
+      <summary class="accordion-summary">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Project watchlist</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">GitLab subscriptions</h3>
+          <p class="mt-1 text-sm text-slate-400">Manage which projects broadcast events into Discord.</p>
+        </div>
+        <div class="accordion-summary-meta">
+          {% if restored_form_name == 'gl_subscription' %}
+          <span class="kbd-pill bg-amber-500/10 border-amber-400/20 text-amber-200"><i class="fa fa-rotate-left"></i> Draft restored</span>
+          {% endif %}
+          <span class="kbd-pill"><i class="fa fa-bell"></i> {{ gl_subscriptions|length }} active</span>
+          <i class="fa fa-chevron-down accordion-chevron"></i>
+        </div>
+      </summary>
+      <div class="accordion-body space-y-5">
+
+        <!-- Add form -->
+        <form method="post" action="/integrations/gitlab/save" class="soft-panel p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
+          <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+          <label class="field-stack xl:col-span-2">
+            <span class="text-xs text-slate-400">Project</span>
+            <input class="input" type="text" name="project" value="{{ subscription_form.project }}" placeholder="namespace/project" required/>
+            <span class="helper-text">The project to watch for pushes, MRs, issues, and releases.</span>
+          </label>
+          <label class="field-stack">
+            <span class="text-xs text-slate-400">Channel ID</span>
+            <input class="input" type="number" name="channel_id" value="{{ subscription_form.channel_id }}" placeholder="123456789012345678" required/>
+            <span class="helper-text">Discord channel receiving the updates.</span>
+          </label>
+          <label class="field-stack xl:col-span-2">
+            <span class="text-xs text-slate-400">Events</span>
+            <input class="input" type="text" name="events" value="{{ subscription_form.events }}" placeholder="push,merge_request,issues,release" required/>
+            <span class="helper-text">Comma-separated event types to include.</span>
+          </label>
+          <button class="btn-primary xl:col-span-5 xl:justify-center" type="submit"><i class="fa fa-plus"></i> Save subscription</button>
+        </form>
+
+        <!-- List -->
+        <div class="table-shell overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
+                <th class="px-4 py-3 font-medium">Project</th>
+                <th class="px-4 py-3 font-medium">Channel</th>
+                <th class="px-4 py-3 font-medium">Events</th>
+                <th class="px-4 py-3 font-medium">Added</th>
+                <th class="px-4 py-3 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in gl_subscriptions %}
+              <tr class="table-row">
+                <td class="px-4 py-3 text-white font-medium">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <a href="{{ gitlab_url }}/{{ row.project }}" target="_blank" rel="noopener" class="hover:text-orange-300 no-underline">{{ row.project }}</a>
+                    <button type="button" class="copy-chip" data-copy-text="{{ row.project }}" data-copy-label="Project"><i class="fa fa-copy"></i> Copy</button>
+                  </div>
+                </td>
+                <td class="px-4 py-3 text-slate-300 font-mono text-xs">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span>{{ row.channel_id }}</span>
+                    <button type="button" class="copy-chip" data-copy-text="{{ row.channel_id }}" data-copy-label="Channel ID"><i class="fa fa-copy"></i> Copy</button>
+                  </div>
+                </td>
+                <td class="px-4 py-3 text-slate-400 text-xs break-all">{{ row.events }}</td>
+                <td class="px-4 py-3 text-slate-500 text-xs">{{ row.created_at[:16] if row.created_at else '—' }}</td>
+                <td class="px-4 py-3">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <form method="post" action="/integrations/gitlab/reset_state" onsubmit="return confirm('Reset saved GitLab poll state for this project? The next poll will resync from the latest event without replaying backlog.')">
+                      <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                      <input type="hidden" name="project" value="{{ row.project }}"/>
+                      <button class="btn-secondary text-xs px-3 py-2" type="submit">Reset cursor</button>
+                    </form>
+                    <form method="post" action="/integrations/gitlab/delete" onsubmit="return confirm('Delete this GitLab subscription?')">
+                      <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                      <input type="hidden" name="subscription_id" value="{{ row.id }}"/>
+                      <button class="btn-danger" type="submit"><i class="fa fa-trash"></i> Remove</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="5" class="px-4 py-10 text-center">
+                  <div class="empty-illustration mx-auto mb-3"><i class="fa fa-bell-slash"></i></div>
+                  <p class="text-sm text-slate-400">No GitLab subscriptions configured yet. Add one above.</p>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    <!-- Poll state -->
+    <details id="gl-poll-state" class="accordion-block">
+      <summary class="accordion-summary">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Poller health</p>
+          <h3 class="mt-2 text-xl font-semibold text-white">Saved poll state</h3>
+          <p class="mt-1 text-sm text-slate-400">Open this for troubleshooting or cursor resets when a project needs to resync.</p>
+        </div>
+        <div class="accordion-summary-meta">
+          <span class="kbd-pill"><i class="fa fa-wave-square"></i> {{ gl_poll_state|length }} rows</span>
+          <i class="fa fa-chevron-down accordion-chevron"></i>
+        </div>
+      </summary>
+      <div class="accordion-body">
+        <div class="table-shell overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-slate-500 text-xs border-b border-slate-800/80">
+                <th class="px-4 py-3 font-medium">Project</th>
+                <th class="px-4 py-3 font-medium">Event type</th>
+                <th class="px-4 py-3 font-medium">Last ID</th>
+                <th class="px-4 py-3 font-medium">Updated</th>
+                <th class="px-4 py-3 font-medium">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in gl_poll_state %}
+              <tr class="table-row">
+                <td class="px-4 py-3 text-white font-medium">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span>{{ row.project }}</span>
+                    <button type="button" class="copy-chip" data-copy-text="{{ row.project }}" data-copy-label="Project"><i class="fa fa-copy"></i> Copy</button>
+                  </div>
+                </td>
+                <td class="px-4 py-3 text-slate-300">{{ row.event_type }}</td>
+                <td class="px-4 py-3 text-slate-400 font-mono text-xs">{{ row.last_id or '—' }}</td>
+                <td class="px-4 py-3 text-slate-500 text-xs">{{ row.updated_at[:16] if row.updated_at else '—' }}</td>
+                <td class="px-4 py-3">
+                  <form method="post" action="/integrations/gitlab/reset_state" onsubmit="return confirm('Reset saved GitLab poll state for this project?')">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="project" value="{{ row.project }}"/>
+                    <button class="btn-secondary text-xs px-3 py-2" type="submit">Reset cursor</button>
+                  </form>
+                </td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="5" class="px-4 py-10 text-center">
+                  <div class="empty-illustration mx-auto mb-3"><i class="fa fa-wave-square"></i></div>
+                  <p class="text-sm text-slate-400">No poll state yet. Once the poller sees events, they will appear here.</p>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.copy-chip[data-copy-text]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(btn.dataset.copyText).then(() => {
+          const orig = btn.innerHTML;
+          btn.innerHTML = '<i class="fa fa-check"></i> Copied';
+          setTimeout(() => { btn.innerHTML = orig; }, 1500);
+        });
+      });
+    });
+  });
+</script>
+{% endblock %}

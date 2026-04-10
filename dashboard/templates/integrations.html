@@ -258,6 +258,13 @@
       </div>
     </div>
 
+    <div class="card p-4 space-y-2">
+      <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Other integrations</p>
+      <a href="/integrations/gitlab{% if guild_id %}?guild_id={{ guild_id }}{% endif %}" class="flex items-center gap-2 text-sm text-slate-300 hover:text-white no-underline py-1">
+        <i class="fa fa-code-branch w-4 text-center text-orange-400"></i> GitLab
+      </a>
+    </div>
+
     <div class="card p-4 space-y-3">
       <h3 class="text-sm font-semibold text-white">Quick guide</h3>
       <div class="space-y-3 text-sm text-slate-400">

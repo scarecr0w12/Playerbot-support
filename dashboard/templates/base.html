@@ -239,8 +239,11 @@
     <a href="/permissions" class="sidebar-link {% if active_page == 'permissions' %}active{% endif %}">
       <i class="fa fa-lock w-4 text-center"></i> Permissions
     </a>
-    <a href="/integrations" class="sidebar-link {% if active_page == 'integrations' %}active{% endif %}">
-      <i class="fa fa-code-branch w-4 text-center"></i> Integrations
+    <a href="/integrations" class="sidebar-link {% if active_page == 'integrations' and active_subpage != 'gitlab' %}active{% endif %}">
+      <i class="fa fa-github w-4 text-center"></i> GitHub
+    </a>
+    <a href="/integrations/gitlab" class="sidebar-link {% if active_subpage == 'gitlab' %}active{% endif %}">
+      <i class="fa fa-code-branch w-4 text-center"></i> GitLab
     </a>
     <a href="/knowledge" class="sidebar-link {% if active_page == 'knowledge' %}active{% endif %}">
       <i class="fa fa-brain w-4 text-center"></i> Knowledge Base

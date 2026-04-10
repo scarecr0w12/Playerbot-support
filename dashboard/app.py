@@ -31,6 +31,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from dashboard.dynamic_config_schema import DynamicConfigSchema
 from dashboard.routes.github_integrations import GitHubIntegrationsModule
+from dashboard.routes.gitlab_integrations import GitLabIntegrationsModule
 from bot.config import Config
 from bot.model_discovery import ModelDiscoveryService
 
@@ -273,6 +274,7 @@ GUILD_ID_QUERIES = [
     "SELECT DISTINCT guild_id FROM starboard_messages WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM highlights WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM github_subscriptions WHERE guild_id IS NOT NULL",
+    "SELECT DISTINCT guild_id FROM gitlab_subscriptions WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM learned_facts WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM response_feedback WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM crawl_sources WHERE guild_id IS NOT NULL",
@@ -1249,6 +1251,22 @@ github_integrations = GitHubIntegrationsModule(
     github_token_configured=bool(config.github_token),
 )
 app.include_router(github_integrations.router)
+
+gitlab_integrations = GitLabIntegrationsModule(
+    templates=templates,
+    ctx=ctx,
+    auth_redirect=auth_redirect,
+    get_authorized_guilds=get_authorized_guilds,
+    get_guild_config_map=get_guild_config_map,
+    require_guild_access=require_guild_access,
+    db_fetchall=db_fetchall,
+    db_fetchone=db_fetchone,
+    db_execute=db_execute,
+    gitlab_token=config.gitlab_token,
+    gitlab_token_configured=bool(config.gitlab_token),
+    gitlab_url=config.gitlab_url,
+)
+app.include_router(gitlab_integrations.router)
 
 # Backward-compatible aliases for tests and existing imports.
 integrations_page = github_integrations.integrations_page
