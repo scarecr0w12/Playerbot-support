@@ -193,9 +193,14 @@ class _MCPConnection:
             self._tools.append(openai_tool)
             self._tool_names.add(openai_tool["function"]["name"])
 
+    @property
+    def is_alive(self) -> bool:
+        """Return True if the session exists and the underlying stack is open."""
+        return self._session is not None and self._stack is not None
+
     async def call_tool(self, openai_tool_name: str, arguments: dict[str, Any]) -> str:
         """Call a tool by its OpenAI-namespaced name and return a string result."""
-        if not self._session:
+        if not self.is_alive:
             return f"[MCP server '{self.config.name}' is not connected]"
 
         # Strip the mcp__<server>__ prefix to get the real tool name
@@ -216,6 +221,10 @@ class _MCPConnection:
             return "\n".join(parts) if parts else "(no output)"
         except Exception as exc:
             logger.warning("MCP tool call '%s' failed: %s", real_name, exc, exc_info=True)
+            # Mark session as dead so get_tools_for_guild stops serving stale tools
+            self._session = None
+            self._tools = []
+            self._tool_names = set()
             return f"[Tool error: {exc}]"
 
 
@@ -298,7 +307,7 @@ class MCPManager:
         """Return all OpenAI-format tool schemas for a guild's connected MCP servers."""
         tools: list[dict[str, Any]] = []
         for (gid, _), conn in self._connections.items():
-            if gid == guild_id and conn._session is not None:
+            if gid == guild_id and conn.is_alive:
                 tools.extend(conn.tools)
         return tools
 
@@ -314,13 +323,39 @@ class MCPManager:
                 return conn
         return None
 
+    def _find_connection_by_server_name(
+        self, guild_id: int, server_name: str
+    ) -> "_MCPConnection | None":
+        return self._connections.get((guild_id, server_name))
+
     async def call_tool(
         self, guild_id: int, tool_name: str, arguments: dict[str, Any]
     ) -> str:
-        """Route a tool call to the correct MCP server."""
+        """Route a tool call to the correct MCP server, auto-reconnecting on dead sessions."""
         conn = self._find_connection_for_tool(guild_id, tool_name)
+
+        # If not found by tool name, the session may be dead (tool_names cleared).
+        # Recover by parsing the server name from the mcp__<server>__<tool> prefix.
+        if conn is None and tool_name.startswith("mcp__"):
+            parts = tool_name.split("__", 2)
+            if len(parts) >= 2:
+                conn = self._find_connection_by_server_name(guild_id, parts[1])
+
         if conn is None:
             return f"[No MCP server found for tool '{tool_name}']"
+
+        if not conn.is_alive:
+            logger.info(
+                "MCP connection for '%s' (guild=%d) is dead — attempting reconnect",
+                conn.config.name, guild_id,
+            )
+            reconnected = await self.reconnect_server(conn.config)
+            if not reconnected:
+                return f"[MCP server '{conn.config.name}' is disconnected and could not reconnect]"
+            conn = self._find_connection_for_tool(guild_id, tool_name)
+            if conn is None:
+                return f"[No MCP server found for tool '{tool_name}' after reconnect]"
+
         return await conn.call_tool(tool_name, arguments)
 
     # ------------------------------------------------------------------
@@ -331,12 +366,12 @@ class MCPManager:
         return [
             name
             for (gid, name), conn in self._connections.items()
-            if gid == guild_id and conn._session is not None
+            if gid == guild_id and conn.is_alive
         ]
 
     def all_connected(self) -> list[tuple[int, str]]:
         return [
             (gid, name)
             for (gid, name), conn in self._connections.items()
-            if conn._session is not None
+            if conn.is_alive
         ]
