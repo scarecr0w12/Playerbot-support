@@ -149,13 +149,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!match) return;
     const msg = match[1];
     form.removeAttribute('onsubmit');
-    form.addEventListener('submit', e => {
+    const onConfirmSubmit = e => {
       e.preventDefault();
       showConfirmDialog(msg, () => {
-        form.removeEventListener('submit', arguments.callee);
+        form.removeEventListener('submit', onConfirmSubmit);
         form.submit();
       });
-    });
+    };
+    form.addEventListener('submit', onConfirmSubmit);
   });
 });
 
