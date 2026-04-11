@@ -15,7 +15,7 @@ import uvicorn
 from discord.ext import commands
 
 from bot.config import Config
-from bot.database import Database
+from bot.db import Database
 from bot.llm_service import LLMService
 from bot.mcp_manager import MCPManager, MCPServerConfig
 from bot.qdrant_service import QdrantService

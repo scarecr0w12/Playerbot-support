@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import bot.database as database_module
+import bot.db.base as database_module
 from bot.cogs.github import (
     GitHubCog,
     _build_issue_triage_embed,
@@ -18,7 +18,7 @@ from bot.cogs.github import (
     _should_send_review_digest,
     _summarize_reviews,
 )
-from bot.database import Database
+from bot.db import Database
 
 
 class GitHubPollerBootstrapTests(unittest.IsolatedAsyncioTestCase):

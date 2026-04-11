@@ -6,7 +6,39 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import dashboard.app as dashboard_app
-from bot.database import _SCHEMA as BOT_SCHEMA
+import dashboard.helpers as dashboard_helpers
+from bot.db import _SCHEMA as BOT_SCHEMA
+from dashboard.routes.knowledge import router as _knowledge_router  # noqa: F401 – side-effect import
+
+# Expose route handler functions used by tests via the app module namespace.
+# The handlers are closures inside dashboard.routes.knowledge.init(), so we
+# reach them via the registered routes on the app object.
+def _get_route_handler(path: str, method: str = "POST"):
+    for route in dashboard_app.app.routes:
+        if hasattr(route, "path") and route.path == path:
+            if hasattr(route, "methods") and method.upper() in (route.methods or set()):
+                return route.endpoint
+            if not hasattr(route, "methods"):
+                return route.endpoint
+    return None
+
+dashboard_app.knowledge_toggle_fact = _get_route_handler("/knowledge/toggle-fact")
+dashboard_app.knowledge_repair_crawl_metadata = _get_route_handler("/knowledge/repair-crawl-metadata")
+dashboard_app.knowledge_reset = _get_route_handler("/knowledge/reset")
+dashboard_app.knowledge_delete_fact = _get_route_handler("/knowledge/delete-fact")
+
+# Expose helper functions that tests call via dashboard_app.*
+dashboard_app.get_all_guilds = dashboard_helpers.get_all_guilds
+dashboard_app.get_knowledge_entries = dashboard_helpers.get_knowledge_entries
+dashboard_app.get_crawl_sources_with_metadata = dashboard_helpers.get_crawl_sources_with_metadata
+dashboard_app.upsert_crawled_embedding = dashboard_helpers.upsert_crawled_embedding
+dashboard_app.upsert_crawl_source = dashboard_helpers.upsert_crawl_source
+dashboard_app.repair_legacy_crawl_metadata = dashboard_helpers.repair_legacy_crawl_metadata
+dashboard_app.clear_knowledge_base = dashboard_helpers.clear_knowledge_base
+dashboard_app.get_db = dashboard_helpers.get_db
+dashboard_app.db_fetchall = dashboard_helpers.db_fetchall
+dashboard_app.db_fetchone = dashboard_helpers.db_fetchone
+dashboard_app.db_execute = dashboard_helpers.db_execute
 
 
 class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
@@ -19,9 +51,10 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
         }
 
     async def asyncSetUp(self) -> None:
-        self._original_db_path = dashboard_app.DB_PATH
+        self._original_db_path = dashboard_helpers.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
-        dashboard_app.DB_PATH = f"{self._tmpdir.name}/test.db"
+        dashboard_helpers.DB_PATH = f"{self._tmpdir.name}/test.db"
+        dashboard_app.DB_PATH = dashboard_helpers.DB_PATH
 
         await dashboard_app.db_execute(
             """
@@ -54,6 +87,7 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self) -> None:
+        dashboard_helpers.DB_PATH = self._original_db_path
         dashboard_app.DB_PATH = self._original_db_path
         self._tmpdir.cleanup()
 
@@ -192,13 +226,13 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(guild_id, 1)
             return {"sources_repaired": 2, "duplicates_removed": 3, "models_filled": 4}
 
-        original_repair = dashboard_app.repair_legacy_crawl_metadata
-        dashboard_app.repair_legacy_crawl_metadata = fake_repair
+        original_repair = dashboard_helpers.repair_legacy_crawl_metadata
+        dashboard_helpers.repair_legacy_crawl_metadata = fake_repair
         try:
             request = SimpleNamespace(session=self._session([1]))
             response = await dashboard_app.knowledge_repair_crawl_metadata(request, guild_id=1)
         finally:
-            dashboard_app.repair_legacy_crawl_metadata = original_repair
+            dashboard_helpers.repair_legacy_crawl_metadata = original_repair
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
@@ -243,13 +277,13 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(guild_id, 1)
             return {"embeddings_cleared": 5, "crawled_chunks_cleared": 3, "sources_cleared": 2}
 
-        original_clear = dashboard_app.clear_knowledge_base
-        dashboard_app.clear_knowledge_base = fake_clear
+        original_clear = dashboard_helpers.clear_knowledge_base
+        dashboard_helpers.clear_knowledge_base = fake_clear
         try:
             request = SimpleNamespace(session=self._session([1]))
             response = await dashboard_app.knowledge_reset(request, guild_id=1)
         finally:
-            dashboard_app.clear_knowledge_base = original_clear
+            dashboard_helpers.clear_knowledge_base = original_clear
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(
@@ -260,9 +294,10 @@ class DashboardKnowledgeTests(unittest.IsolatedAsyncioTestCase):
 
 class DashboardKnowledgeLegacySchemaTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._original_db_path = dashboard_app.DB_PATH
+        self._original_db_path = dashboard_helpers.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
-        dashboard_app.DB_PATH = f"{self._tmpdir.name}/legacy.db"
+        dashboard_helpers.DB_PATH = f"{self._tmpdir.name}/legacy.db"
+        dashboard_app.DB_PATH = dashboard_helpers.DB_PATH
 
         await dashboard_app.db_execute(
             """
@@ -293,6 +328,7 @@ class DashboardKnowledgeLegacySchemaTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self) -> None:
+        dashboard_helpers.DB_PATH = self._original_db_path
         dashboard_app.DB_PATH = self._original_db_path
         self._tmpdir.cleanup()
 
@@ -359,9 +395,10 @@ class DashboardLearnedFactsSyncTests(unittest.IsolatedAsyncioTestCase):
         }
 
     async def asyncSetUp(self) -> None:
-        self._original_db_path = dashboard_app.DB_PATH
+        self._original_db_path = dashboard_helpers.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
-        dashboard_app.DB_PATH = f"{self._tmpdir.name}/facts.db"
+        dashboard_helpers.DB_PATH = f"{self._tmpdir.name}/facts.db"
+        dashboard_app.DB_PATH = dashboard_helpers.DB_PATH
 
         await dashboard_app.db_execute(
             """
@@ -382,6 +419,7 @@ class DashboardLearnedFactsSyncTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self) -> None:
+        dashboard_helpers.DB_PATH = self._original_db_path
         dashboard_app.DB_PATH = self._original_db_path
         self._tmpdir.cleanup()
 
@@ -420,9 +458,10 @@ class DashboardLearnedFactsSyncTests(unittest.IsolatedAsyncioTestCase):
 
 class DashboardGuildListingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self._original_db_path = dashboard_app.DB_PATH
+        self._original_db_path = dashboard_helpers.DB_PATH
         self._tmpdir = tempfile.TemporaryDirectory()
-        dashboard_app.DB_PATH = f"{self._tmpdir.name}/guilds.db"
+        dashboard_helpers.DB_PATH = f"{self._tmpdir.name}/guilds.db"
+        dashboard_app.DB_PATH = dashboard_helpers.DB_PATH
 
         db = await dashboard_app.get_db()
         try:
@@ -432,6 +471,7 @@ class DashboardGuildListingTests(unittest.IsolatedAsyncioTestCase):
             await db.close()
 
     async def asyncTearDown(self) -> None:
+        dashboard_helpers.DB_PATH = self._original_db_path
         dashboard_app.DB_PATH = self._original_db_path
         self._tmpdir.cleanup()
 

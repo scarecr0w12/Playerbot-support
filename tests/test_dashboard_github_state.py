@@ -7,7 +7,15 @@ from urllib.parse import parse_qs, urlparse
 from unittest.mock import AsyncMock
 
 import dashboard.app as dashboard_app
+import dashboard.helpers as dashboard_helpers
+from fastapi import HTTPException
 from dashboard.routes.github_integrations import FORM_STATE_CACHE, _take_form_state, build_review_preview, build_triage_preview
+
+# Re-export symbols the tests expect on dashboard_app
+dashboard_app.HTTPException = HTTPException
+dashboard_app.db_execute = dashboard_helpers.db_execute
+dashboard_app.db_fetchone = dashboard_helpers.db_fetchone
+dashboard_app.db_fetchall = dashboard_helpers.db_fetchall
 
 
 class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
@@ -20,10 +28,11 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         }
 
     async def asyncSetUp(self) -> None:
-        self._original_db_path = dashboard_app.DB_PATH
+        self._original_db_path = dashboard_helpers.DB_PATH
         self._original_github_get = dashboard_app.github_integrations._github_get
         self._tmpdir = tempfile.TemporaryDirectory()
-        dashboard_app.DB_PATH = f"{self._tmpdir.name}/test.db"
+        dashboard_helpers.DB_PATH = f"{self._tmpdir.name}/test.db"
+        dashboard_app.DB_PATH = dashboard_helpers.DB_PATH
         FORM_STATE_CACHE.clear()
 
         await dashboard_app.db_execute(
@@ -64,6 +73,7 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self) -> None:
+        dashboard_helpers.DB_PATH = self._original_db_path
         dashboard_app.DB_PATH = self._original_db_path
         dashboard_app.github_integrations._github_get = self._original_github_get
         FORM_STATE_CACHE.clear()
@@ -109,7 +119,7 @@ class DashboardGitHubStateTests(unittest.IsolatedAsyncioTestCase):
 
         request = SimpleNamespace(session=self._session([2]))
 
-        with self.assertRaises(dashboard_app.HTTPException) as exc:
+        with self.assertRaises(HTTPException) as exc:
             await dashboard_app.integrations_github_reset_state(request, guild_id=1, repo="owner/repo")
 
         self.assertEqual(exc.exception.status_code, 403)

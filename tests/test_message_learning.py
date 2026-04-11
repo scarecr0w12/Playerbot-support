@@ -5,9 +5,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import bot.database as database_module
+import bot.db.base as database_module
 from bot.cogs.support import SupportCog, _message_text_for_learning
-from bot.database import Database
+from bot.db import Database
 from bot.llm_service import LLMService
 
 

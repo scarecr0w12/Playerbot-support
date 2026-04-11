@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import aiohttp
@@ -37,7 +37,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 if TYPE_CHECKING:
-    from bot.database import Database
+    from bot.db import Database
     from bot.config import Config
 
 logger = logging.getLogger(__name__)

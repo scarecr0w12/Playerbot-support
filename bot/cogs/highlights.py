@@ -31,7 +31,7 @@ from discord import app_commands
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from bot.database import Database
+    from bot.db import Database
 
 logger = logging.getLogger(__name__)
 
