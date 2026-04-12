@@ -1013,7 +1013,27 @@ class LLMService:
                 style=style,      # type: ignore[arg-type]
                 n=1,
             )
-            return response.data[0].url
+            data = getattr(response, "data", None) or []
+            if not data:
+                logger.error(
+                    "Image generation returned empty data (model=%r, response_type=%s)",
+                    model,
+                    type(response).__name__,
+                )
+                return None
+            first = data[0]
+            url = getattr(first, "url", None)
+            if url:
+                return url
+            if getattr(first, "b64_json", None):
+                logger.error(
+                    "Image generation returned only b64_json (no URL); model=%r — "
+                    "Discord embeds need a hosted URL. Try another image model or proxy settings.",
+                    model,
+                )
+                return None
+            logger.error("Image generation response missing url and b64_json (model=%r)", model)
+            return None
         except Exception:
             logger.exception("Image generation failed")
             return None
