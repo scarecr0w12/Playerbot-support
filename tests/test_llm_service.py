@@ -8,7 +8,9 @@ from bot.llm_service import (
     LLMService,
     _assistant_message_visible_text,
     _message_content_to_text,
+    _parse_create_embed_dict_from_serialized_tool,
     _qwen_disable_thinking_extra,
+    _text_looks_like_create_embed_json,
     extended_reasoning_model,
 )
 
@@ -232,6 +234,7 @@ class LLMServiceCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             model="gpt-4o-mini",
             temperature=0.2,
             max_tokens=512,
+            allow_tools=False,
         )
         kw = create.await_args.kwargs
         self.assertEqual(kw.get("max_tokens"), 512)
@@ -260,6 +263,64 @@ class LLMServiceCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         kw = create.await_args.kwargs
         eb = kw.get("extra_body") or {}
         self.assertEqual(eb.get("chat_template_kwargs"), {"enable_thinking": False})
+
+    def test_parse_create_embed_from_inline_json(self) -> None:
+        raw = (
+            '{"name": "create_embed", "arguments": {"title": "T", "description": "D", "color": "#000000"}}'
+        )
+        self.assertTrue(_text_looks_like_create_embed_json(raw))
+        d = _parse_create_embed_dict_from_serialized_tool(raw)
+        self.assertEqual(d, {"title": "T", "description": "D", "color": "#000000"})
+
+    def test_parse_create_embed_truncated_returns_none(self) -> None:
+        raw = '{"name": "create_embed", "arguments": {"title": "T", "description": "D", "fields": [{"name": "x",'
+        self.assertTrue(_text_looks_like_create_embed_json(raw))
+        self.assertIsNone(_parse_create_embed_dict_from_serialized_tool(raw))
+
+    async def test_get_response_inline_create_embed_json_becomes_embed(self) -> None:
+        inline = (
+            '{"name": "create_embed", "arguments": {"title": "Hi", "description": "Body text here."}}'
+        )
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content=inline, tool_calls=None),
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        llm, _ = self._make_service([response])
+        result = await llm.get_response(
+            [{"role": "user", "content": "make embed"}],
+            system_prompt="s",
+            model="qwen3.5",
+            allow_tools=False,
+        )
+        self.assertEqual(result["content"], "")
+        self.assertEqual(result["embeds"], [{"title": "Hi", "description": "Body text here."}])
+
+    async def test_get_response_truncated_inline_create_embed_gets_message(self) -> None:
+        inline = '{"name": "create_embed", "arguments": {"title": "T", "description": "D", "fields": [{"name":'
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="length",
+                    message=SimpleNamespace(content=inline, tool_calls=None),
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        llm, _ = self._make_service([response])
+        result = await llm.get_response(
+            [{"role": "user", "content": "x"}],
+            system_prompt="s",
+            model="qwen3.5",
+            allow_tools=False,
+        )
+        self.assertTrue(result["content"])
+        self.assertIn("max tokens", result["content"].lower())
+        self.assertEqual(result["embeds"], [])
 
     async def test_get_response_forwards_reasoning_effort_in_extra_body(self) -> None:
         response = SimpleNamespace(

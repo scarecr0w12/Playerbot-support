@@ -365,7 +365,11 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "create_embed",
-            "description": "Create a rich embed to display structured information. Returns JSON that the bot will render.",
+            "description": (
+                "Create a rich embed to display structured information. "
+                "Invoke this as a native function/tool call (do not paste tool JSON into the chat text). "
+                "Returns JSON that the bot will render."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -410,6 +414,60 @@ def _execute_builtin_tool(name: str, arguments: dict[str, Any]) -> str:
         return json.dumps(arguments)
 
     return f"Unknown tool: {name}"
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    lines = s.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    s = "\n".join(lines)
+    if s.rstrip().endswith("```"):
+        s = s.rstrip()[:-3].rstrip()
+    return s.strip()
+
+
+def _text_looks_like_create_embed_json(text: str) -> bool:
+    """Models sometimes emit OpenAI-style tool JSON in message content instead of tool_calls."""
+    s = text.strip().lower()
+    if not s.startswith("{") and not s.startswith("```"):
+        return False
+    return "create_embed" in s and ("arguments" in s or '"name"' in s or "'name'" in s)
+
+
+def _parse_create_embed_dict_from_serialized_tool(text: str) -> dict[str, Any] | None:
+    """If *text* is JSON for create_embed with complete arguments, return the embed dict."""
+    s = _strip_markdown_code_fence(text)
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    args: Any = None
+    if name == "create_embed":
+        args = data.get("arguments")
+    else:
+        fn = data.get("function")
+        if isinstance(fn, dict) and fn.get("name") == "create_embed":
+            args = fn.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(args, dict):
+        return None
+    if not str(args.get("title", "")).strip() or not str(args.get("description", "")).strip():
+        return None
+    return args
+
+
+def _is_valid_embed_dict(data: dict[str, Any]) -> bool:
+    return bool(str(data.get("title", "")).strip() and str(data.get("description", "")).strip())
 
 
 def _execute_custom_function(name: str, code: str, arguments: dict[str, Any]) -> str:
@@ -568,10 +626,15 @@ class LLMService:
         use_completion_budget = _openai_style_completion_budget(base_url, mdl)
         strict_sampling = _openai_strict_sampling(base_url, mdl)
 
+        out_cap = max_tokens
+        if all_tools:
+            # Long JSON tool arguments (e.g. create_embed) need headroom; small caps truncate mid-field.
+            out_cap = min(8192, max(max_tokens, 1792))
+
         if llm_debug:
             logger.info(
                 "LLM get_response start guild_id=%s origin=%s model=%s history_msgs=%d "
-                "tool_defs=%d allow_tools=%s temp=%s max_out=%s reasoning_effort=%s "
+                "tool_defs=%d allow_tools=%s temp=%s max_out=%s out_cap=%s reasoning_effort=%s "
                 "completion_budget=%s strict_sampling=%s",
                 guild_id,
                 llm_origin,
@@ -581,6 +644,7 @@ class LLMService:
                 allow_tools,
                 temperature,
                 max_tokens,
+                out_cap,
                 effort,
                 use_completion_budget,
                 strict_sampling,
@@ -594,9 +658,9 @@ class LLMService:
             if not strict_sampling:
                 kwargs["temperature"] = temperature
             if use_completion_budget:
-                kwargs["max_completion_tokens"] = max_tokens
+                kwargs["max_completion_tokens"] = out_cap
             else:
-                kwargs["max_tokens"] = max_tokens
+                kwargs["max_tokens"] = out_cap
             extra_body: dict[str, Any] = {}
             if effort:
                 extra_body["reasoning_effort"] = effort
@@ -689,6 +753,21 @@ class LLMService:
                 content = _assistant_message_visible_text(choice.message)
                 if not content and isinstance(refusal, str) and refusal.strip():
                     content = refusal.strip()
+                if content and _text_looks_like_create_embed_json(content):
+                    parsed_embed = _parse_create_embed_dict_from_serialized_tool(content)
+                    if parsed_embed is not None:
+                        embeds.append(parsed_embed)
+                        return {
+                            "content": "",
+                            "embeds": embeds,
+                            "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
+                        }
+                    content = (
+                        "I tried to build an embed but the tool JSON was cut off before it finished "
+                        "(almost always the completion token limit). Raise **Assistant max tokens** in this "
+                        "server's assistant settings—**2048** or higher is recommended when using embeds—or ask "
+                        "for a shorter embed."
+                    )
                 if not content and not embeds:
                     logger.warning(
                         "LLM returned empty assistant message (guild_id=%s model=%s round=%d "
@@ -727,7 +806,16 @@ class LLMService:
                 # Collect embeds from create_embed calls
                 if fn_name == "create_embed":
                     try:
-                        embeds.append(json.loads(result))
+                        ed = json.loads(result)
+                        if isinstance(ed, dict) and _is_valid_embed_dict(ed):
+                            embeds.append(ed)
+                        else:
+                            logger.warning(
+                                "create_embed arguments incomplete or invalid (truncated tool JSON?); "
+                                "guild_id=%s model=%s",
+                                guild_id,
+                                mdl,
+                            )
                     except json.JSONDecodeError:
                         logger.warning("create_embed tool returned non-JSON; asking model again")
 
