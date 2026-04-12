@@ -35,9 +35,12 @@ from bot.model_discovery import ModelDiscoveryService
 logger = logging.getLogger(__name__)
 
 DISCORD_MAX_LEN = 2000
-BRAIN_EMOJI = "🧠"
-BRAIN_EMOJI_NAME = "brain"
+# React with any of these on a message to save its text as an approved learned fact (Manage Server).
+_TRAIN_REACTION_EMOJI_CHARS = frozenset({"🧠", "👍"})
+_TRAIN_REACTION_EMOJI_NAMES = frozenset({"brain", "thumbsup", "+1"})
 MAX_LEARNED_MESSAGE_LEN = 4000
+ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY = "assistant_train_trusted_user_ids"
+MAX_TRAIN_TRUSTED_USERS = 50
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,10 +103,35 @@ def _embed_from_dict(data: dict) -> discord.Embed:
     return em
 
 
-def _is_brain_emoji(emoji: discord.PartialEmoji | discord.Emoji | str) -> bool:
+def _parse_train_trusted_user_ids(raw: str | None) -> set[int]:
+    """Comma-separated user IDs from guild_config."""
+    if not raw:
+        return set()
+    out: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.add(int(part))
+        except ValueError:
+            continue
+    return out
+
+
+def _serialize_train_trusted_user_ids(ids: set[int]) -> str:
+    return ",".join(str(i) for i in sorted(ids))
+
+
+def _is_message_train_reaction_emoji(emoji: discord.PartialEmoji | discord.Emoji | str) -> bool:
+    """True for 🧠 or 👍 (unicode or common Discord short names on custom emoji)."""
     emoji_str = str(emoji)
-    emoji_name = getattr(emoji, "name", emoji_str)
-    return emoji_str == BRAIN_EMOJI or str(emoji_name).lower() == BRAIN_EMOJI_NAME
+    if emoji_str in _TRAIN_REACTION_EMOJI_CHARS:
+        return True
+    name = getattr(emoji, "name", None)
+    if name is not None and str(name).lower() in _TRAIN_REACTION_EMOJI_NAMES:
+        return True
+    return False
 
 
 def _message_text_for_learning(message: discord.Message) -> str:
@@ -235,6 +263,13 @@ class SupportCog(commands.Cog, name="Support"):
     async def cog_unload(self) -> None:
         self.bot.tree.remove_command(self._ask_ctx.name, type=self._ask_ctx.type)
 
+    async def _reaction_train_allowed(self, guild_id: int, member: discord.Member) -> bool:
+        """Who may use 🧠/👍 to save a message as a learned fact."""
+        if member.guild_permissions.manage_guild or member.guild_permissions.manage_messages:
+            return True
+        raw = await self.db.get_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY)
+        return member.id in _parse_train_trusted_user_ids(raw)
+
     async def _learn_from_marked_message(
         self,
         message: discord.Message,
@@ -253,7 +288,7 @@ class SupportCog(commands.Cog, name="Support"):
             return "empty"
         if not self.llm.is_storable_fact(learned_text, source_text=learned_text):
             logger.info(
-                "Rejected brain-marked message %s in guild %s because it is not durable factual knowledge",
+                "Rejected train-reaction message %s in guild %s because it is not durable factual knowledge",
                 message.id,
                 guild_id,
             )
@@ -263,7 +298,7 @@ class SupportCog(commands.Cog, name="Support"):
         try:
             vec, packed = await self.llm.create_embedding(learned_text, model=emb_model)
         except Exception:
-            logger.exception("Failed to embed brain-marked message %s", message.id)
+            logger.exception("Failed to embed train-reaction message %s", message.id)
             return "failed"
 
         inserted = await self.db.add_learned_fact(
@@ -298,7 +333,7 @@ class SupportCog(commands.Cog, name="Support"):
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        if not payload.guild_id or not _is_brain_emoji(payload.emoji):
+        if not payload.guild_id or not _is_message_train_reaction_emoji(payload.emoji):
             return
 
         if self.bot.user and payload.user_id == self.bot.user.id:
@@ -315,7 +350,7 @@ class SupportCog(commands.Cog, name="Support"):
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 return
 
-        if not member.guild_permissions.manage_guild:
+        if not await self._reaction_train_allowed(payload.guild_id, member):
             return
 
         channel = guild.get_channel(payload.channel_id)
@@ -330,7 +365,7 @@ class SupportCog(commands.Cog, name="Support"):
         status = await self._learn_from_marked_message(message, marked_by=member.id)
         if status == "learned":
             logger.info(
-                "Learned from brain-marked message %s in guild %s by user %s",
+                "Learned from train-reaction on message %s in guild %s by user %s",
                 payload.message_id,
                 payload.guild_id,
                 member.id,
@@ -1546,6 +1581,19 @@ class SupportCog(commands.Cog, name="Support"):
         fn_count = len(await self.db.get_all_functions(guild_id))
         em.add_field(name="Custom functions", value=str(fn_count))
 
+        trusted_n = len(_parse_train_trusted_user_ids(
+            await self.db.get_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY)
+        ))
+        em.add_field(
+            name="React-train (🧠/👍)",
+            value=(
+                "Allowed: **Manage Server**, **Manage Messages**, or trusted list "
+                f"(`{trusted_n}` user{'s' if trusted_n != 1 else ''}). "
+                "`/train trusted list`"
+            ),
+            inline=False,
+        )
+
         await interaction.response.send_message(embed=em, ephemeral=True)
 
     # ==================================================================
@@ -1623,6 +1671,85 @@ class SupportCog(commands.Cog, name="Support"):
         name="train", description="Teach the AI new knowledge",
         default_permissions=discord.Permissions(manage_guild=True),
     )
+    train_trusted_group = app_commands.Group(
+        name="trusted",
+        description="Members who may react-train (🧠/👍) without Manage Messages",
+        parent=train_group,
+    )
+
+    @train_trusted_group.command(name="add", description="Trust a member to save knowledge via 🧠 or 👍 on messages")
+    @app_commands.describe(member="Member who may react-train without moderator permissions")
+    async def train_trusted_add(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        if member.bot:
+            await interaction.response.send_message("Bots cannot be react-train trusted users.", ephemeral=True)
+            return
+        raw = await self.db.get_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY)
+        ids = _parse_train_trusted_user_ids(raw)
+        if member.id in ids:
+            await interaction.response.send_message(f"{member.mention} is already trusted.", ephemeral=True)
+            return
+        if len(ids) >= MAX_TRAIN_TRUSTED_USERS:
+            await interaction.response.send_message(
+                f"You can trust at most **{MAX_TRAIN_TRUSTED_USERS}** members. Remove one before adding another.",
+                ephemeral=True,
+            )
+            return
+        ids.add(member.id)
+        await self.db.set_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY, _serialize_train_trusted_user_ids(ids))
+        await interaction.response.send_message(
+            f"{member.mention} can now react with 🧠 or 👍 to save messages as learned facts.",
+            ephemeral=True,
+        )
+
+    @train_trusted_group.command(name="remove", description="Remove a member from the react-train trusted list")
+    @app_commands.describe(member="Member to remove from the trusted list")
+    async def train_trusted_remove(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        raw = await self.db.get_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY)
+        ids = _parse_train_trusted_user_ids(raw)
+        if member.id not in ids:
+            await interaction.response.send_message(f"{member.mention} is not on the react-train trusted list.", ephemeral=True)
+            return
+        ids.discard(member.id)
+        await self.db.set_guild_config(
+            guild_id,
+            ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY,
+            _serialize_train_trusted_user_ids(ids) if ids else "",
+        )
+        await interaction.response.send_message(f"Removed {member.mention} from react-train trusted users.", ephemeral=True)
+
+    @train_trusted_group.command(name="list", description="List members trusted for react-training")
+    async def train_trusted_list(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        guild = interaction.guild
+        raw = await self.db.get_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY)
+        ids = sorted(_parse_train_trusted_user_ids(raw))
+        if not ids:
+            await interaction.response.send_message(
+                "No trusted react-train users. **Manage Server** or **Manage Messages** can always react-train; "
+                "use `/train trusted add` to delegate to other members.",
+                ephemeral=True,
+            )
+            return
+        lines: list[str] = []
+        for uid in ids[:40]:
+            m = guild.get_member(uid) if guild else None
+            if m:
+                lines.append(f"• {m.mention} (`{uid}`)")
+            else:
+                lines.append(f"• Unknown user (`{uid}`) — not currently in this server")
+        extra = f"\n… and **{len(ids) - 40}** more." if len(ids) > 40 else ""
+        await interaction.response.send_message(
+            "**Trusted react-train users:**\n" + "\n".join(lines) + extra,
+            ephemeral=True,
+        )
+
+    @train_trusted_group.command(name="clear", description="Remove everyone from the react-train trusted list")
+    async def train_trusted_clear(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild.id  # type: ignore[union-attr]
+        await self.db.set_guild_config(guild_id, ASSISTANT_TRAIN_TRUSTED_USER_IDS_KEY, "")
+        await interaction.response.send_message("Cleared all react-train trusted users.", ephemeral=True)
 
     @train_group.command(name="fact", description="Teach the AI a single fact")
     @app_commands.describe(fact="A clear, self-contained factual statement to store")
@@ -1853,8 +1980,9 @@ class SupportCog(commands.Cog, name="Support"):
                 "**/train fact** `<fact>` — Teach the AI a single fact\n"
                 "**/train qa** `<question>` `<answer>` — Teach via Q&A pair\n"
                 "**/train text** `<text>` — Auto-extract facts from a text block\n"
-                "React to a message with 🧠 to store that message as server knowledge\n"
+                "React with 🧠 or 👍 to store that message (Manage Server/Messages, or `/train trusted`)\n"
                 "**/train list** — Browse learned facts (paginated)\n"
+                "**/train trusted** add/remove/list/clear — who may 🧠/👍 without Manage Messages\n"
                 "**/train delete** `<id>` · **/train approve** `<id>` `<bool>` · **/train reset**\n"
                 "Responses include 👍/👎 buttons — ratings are logged for review"
             ),

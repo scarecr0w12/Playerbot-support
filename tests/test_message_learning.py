@@ -1,14 +1,51 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import discord
 
 import bot.db.base as database_module
-from bot.cogs.support import SupportCog, _message_text_for_learning
+from bot.cogs.support import (
+    SupportCog,
+    _is_message_train_reaction_emoji,
+    _message_text_for_learning,
+    _parse_train_trusted_user_ids,
+    _serialize_train_trusted_user_ids,
+)
 from bot.db import Database
 from bot.llm_service import LLMService
+
+
+class TrainTrustedUserIdsTests(unittest.TestCase):
+    def test_parse_ignores_garbage_and_duplicates(self) -> None:
+        self.assertEqual(_parse_train_trusted_user_ids(""), set())
+        self.assertEqual(_parse_train_trusted_user_ids(None), set())
+        self.assertEqual(_parse_train_trusted_user_ids("1, 2, x, 2"), {1, 2})
+
+    def test_roundtrip_serialize(self) -> None:
+        ids = {99, 1, 42}
+        self.assertEqual(_parse_train_trusted_user_ids(_serialize_train_trusted_user_ids(ids)), ids)
+
+
+class TrainReactionEmojiTests(unittest.TestCase):
+    def test_unicode_brain_and_thumbs_match(self) -> None:
+        self.assertTrue(_is_message_train_reaction_emoji("🧠"))
+        self.assertTrue(_is_message_train_reaction_emoji("👍"))
+        self.assertTrue(_is_message_train_reaction_emoji(discord.PartialEmoji(name="🧠")))
+        self.assertTrue(_is_message_train_reaction_emoji(discord.PartialEmoji(name="👍")))
+
+    def test_common_custom_emoji_names_match(self) -> None:
+        self.assertTrue(_is_message_train_reaction_emoji(discord.PartialEmoji(name="brain", id=1)))
+        self.assertTrue(_is_message_train_reaction_emoji(discord.PartialEmoji(name="Thumbsup", id=2)))
+        self.assertTrue(_is_message_train_reaction_emoji(discord.PartialEmoji(name="+1", id=3)))
+
+    def test_unrelated_emoji_does_not_match(self) -> None:
+        self.assertFalse(_is_message_train_reaction_emoji("⭐"))
+        self.assertFalse(_is_message_train_reaction_emoji(discord.PartialEmoji(name="star", id=4)))
 
 
 class MessageLearningDatabaseTests(unittest.IsolatedAsyncioTestCase):
@@ -35,7 +72,64 @@ class MessageLearningDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.db.has_learned_message_mark(1, 101))
 
 
+class ReactionTrainAllowedTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._env = patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "dummy", "OPENAI_API_KEY": "dummy"})
+        self._env.start()
+
+    def tearDown(self) -> None:
+        self._env.stop()
+
+    async def test_manage_messages_or_guild_without_trusted_list(self) -> None:
+        db = MagicMock()
+        db.get_guild_config = AsyncMock(return_value="")
+        llm = MagicMock()
+        bot = MagicMock()
+        bot.tree = MagicMock()
+        bot.tree.add_command = MagicMock()
+        cog = SupportCog(bot=bot, db=db, llm=llm, qdrant=MagicMock())
+
+        mod_msgs = SimpleNamespace(
+            id=1,
+            guild_permissions=SimpleNamespace(manage_guild=False, manage_messages=True),
+        )
+        mod_guild = SimpleNamespace(
+            id=2,
+            guild_permissions=SimpleNamespace(manage_guild=True, manage_messages=False),
+        )
+        nobody = SimpleNamespace(
+            id=3,
+            guild_permissions=SimpleNamespace(manage_guild=False, manage_messages=False),
+        )
+
+        self.assertTrue(await cog._reaction_train_allowed(10, mod_msgs))  # type: ignore[arg-type]
+        self.assertTrue(await cog._reaction_train_allowed(10, mod_guild))  # type: ignore[arg-type]
+        self.assertFalse(await cog._reaction_train_allowed(10, nobody))  # type: ignore[arg-type]
+
+    async def test_trusted_user_id_in_guild_config(self) -> None:
+        db = MagicMock()
+        db.get_guild_config = AsyncMock(return_value="99,100")
+        llm = MagicMock()
+        bot = MagicMock()
+        bot.tree = MagicMock()
+        bot.tree.add_command = MagicMock()
+        cog = SupportCog(bot=bot, db=db, llm=llm, qdrant=MagicMock())
+
+        trusted = SimpleNamespace(
+            id=99,
+            guild_permissions=SimpleNamespace(manage_guild=False, manage_messages=False),
+        )
+        self.assertTrue(await cog._reaction_train_allowed(10, trusted))  # type: ignore[arg-type]
+
+
 class MessageLearningSupportTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._env = patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "dummy", "OPENAI_API_KEY": "dummy"})
+        self._env.start()
+
+    def tearDown(self) -> None:
+        self._env.stop()
+
     async def test_message_text_for_learning_includes_embed_content(self) -> None:
         message = SimpleNamespace(
             content="",
