@@ -86,6 +86,17 @@ def _fill_placeholders(text: str, ctx: dict[str, Any]) -> str:
     return text
 
 
+def _embeds_for_image_urls(urls: list[str]) -> list[discord.Embed]:
+    """One embed per URL so Discord can render generated images (OpenAI-style hosted URLs)."""
+    out: list[discord.Embed] = []
+    for i, url in enumerate(urls[:4]):
+        title = "🎨 Generated image" if len(urls) == 1 else f"🎨 Generated image ({i + 1}/{len(urls)})"
+        em = discord.Embed(title=title, color=discord.Color.purple())
+        em.set_image(url=url)
+        out.append(em)
+    return out
+
+
 def _embed_from_dict(data: dict) -> discord.Embed:
     """Build a Discord Embed from a dict returned by the create_embed tool."""
     color_str = data.get("color", "#5865F2")
@@ -172,7 +183,7 @@ def _make_feedback_ctx(
         "user_id": interaction.user.id,
         "message_id": None,
         "user_input": user_input[:1000],
-        "bot_response": result.get("content", "")[:1000],
+        "bot_response": _feedback_bot_response_snippet(result),
     }
 
 
@@ -189,8 +200,18 @@ def _make_feedback_ctx_from_message(
         "user_id": message.author.id,
         "message_id": None,
         "user_input": message.content[:1000],
-        "bot_response": result.get("content", "")[:1000],
+        "bot_response": _feedback_bot_response_snippet(result),
     }
+
+
+def _feedback_bot_response_snippet(result: dict[str, Any]) -> str:
+    text = (result.get("content") or "").strip()
+    if text:
+        return text[:1000]
+    urls = result.get("image_urls") or []
+    if isinstance(urls, list) and urls and isinstance(urls[0], str):
+        return f"[Generated image] {urls[0][:900]}"
+    return ""
 
 
 class FeedbackView(discord.ui.View):
@@ -627,6 +648,19 @@ class SupportCog(commands.Cog, name="Support"):
                 "private chain-of-thought, step labels, or meta-commentary about how you think."
             )
 
+        image_model_for_tools: str | None = None
+        if guild:
+            draw_on = await self.db.get_guild_config(guild_id, "assistant_draw_enabled") != "0"
+            if draw_on:
+                im = (await self._get_image_model(guild_id)).strip()
+                if im:
+                    image_model_for_tools = im
+                    system_prompt += (
+                        "\n\nWhen the user asks you to draw, paint, illustrate, render, create a picture or image, "
+                        "or similar, call the **generate_image** tool with a clear `prompt` describing what to render. "
+                        "The image will appear in the channel automatically; you may add a short follow-up message."
+                    )
+
         result = await self.llm.get_response(
             conversation,
             system_prompt=system_prompt,
@@ -638,12 +672,18 @@ class SupportCog(commands.Cog, name="Support"):
             mcp_manager=self.mcp_manager,
             guild_id=guild_id,
             custom_functions=custom_fn_code or None,
+            image_model=image_model_for_tools,
         )
 
         # Store assistant reply
         content = result.get("content", "")
+        image_urls = result.get("image_urls") or []
         if content:
             await self.db.add_conversation_message(guild_id, channel_id, user_id, "assistant", content)
+        elif image_urls:
+            await self.db.add_conversation_message(
+                guild_id, channel_id, user_id, "assistant", "(Assistant generated an image.)"
+            )
 
         # Log token usage
         usage = result.get("usage", {})
@@ -680,13 +720,16 @@ class SupportCog(commands.Cog, name="Support"):
         """
         content = result.get("content", "")
         embeds_data = result.get("embeds", [])
+        image_urls = result.get("image_urls") or []
 
         discord_embeds = [_embed_from_dict(e) for e in embeds_data]
+        image_embeds = _embeds_for_image_urls([u for u in image_urls if isinstance(u, str) and u.strip()])
+        combined_embeds = (discord_embeds + image_embeds)[:10]
         view = FeedbackView(self.db, feedback_ctx) if feedback_ctx else discord.utils.MISSING
 
         if content:
             chunks = _split(content)
-            first_embeds = discord_embeds[:10] if discord_embeds else []
+            first_embeds = combined_embeds if combined_embeds else []
             msg = await send_func(
                 chunks[0],
                 embeds=first_embeds or discord.utils.MISSING,
@@ -701,8 +744,8 @@ class SupportCog(commands.Cog, name="Support"):
                     pass
             for chunk in chunks[1:]:
                 await send_func(chunk)
-        elif discord_embeds:
-            await send_func(embeds=discord_embeds[:10], view=view)
+        elif combined_embeds:
+            await send_func(embeds=combined_embeds, view=view)
         else:
             gid = feedback_ctx.get("guild_id") if feedback_ctx else None
             cid = feedback_ctx.get("channel_id") if feedback_ctx else None

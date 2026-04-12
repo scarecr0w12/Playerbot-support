@@ -396,6 +396,46 @@ BUILTIN_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Appended to tool list when a guild has image generation enabled (see ``get_response``).
+GENERATE_IMAGE_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "generate_image",
+        "description": (
+            "Generate an image from a text description using this server's configured image model. "
+            "Call this when the user asks to draw, paint, illustrate, render, or create a picture or image. "
+            "Do not claim you cannot create images if this tool is available."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Detailed description of the image to generate.",
+                },
+                "size": {
+                    "type": "string",
+                    "description": "Image dimensions.",
+                    "enum": ["1024x1024", "1792x1024", "1024x1792"],
+                },
+                "quality": {
+                    "type": "string",
+                    "description": "Rendering quality where supported.",
+                    "enum": ["standard", "hd"],
+                },
+                "style": {
+                    "type": "string",
+                    "description": "Style preset where supported (e.g. DALL-E 3).",
+                    "enum": ["vivid", "natural"],
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+}
+
+_ALLOWED_IMAGE_SIZES = frozenset({"1024x1024", "1792x1024", "1024x1792"})
+
 
 def _execute_builtin_tool(name: str, arguments: dict[str, Any]) -> str:
     """Execute a built-in tool and return a string result."""
@@ -580,6 +620,7 @@ class LLMService:
         guild_id: int = 0,
         custom_functions: dict[str, str] | None = None,
         reasoning_effort: str | None = None,
+        image_model: str | None = None,
     ) -> dict[str, Any]:
         """Send a chat completion request and handle tool calls.
 
@@ -591,6 +632,7 @@ class LLMService:
         dict with keys:
             content  - The final assistant text reply.
             embeds   - List of embed dicts to render (from create_embed tool).
+            image_urls - URLs of images from the ``generate_image`` tool (Discord can embed them).
             usage    - {"prompt_tokens": int, "completion_tokens": int}
         """
         prompt = system_prompt
@@ -600,6 +642,8 @@ class LLMService:
             *conversation_history,
         ]
 
+        image_urls: list[str] = []
+
         tool_support = getattr(self, "_tool_support_by_model", None)
         if tool_support is None:
             tool_support = {}
@@ -607,6 +651,9 @@ class LLMService:
         tools_allowed_for_model = allow_tools and tool_support.get(mdl, True)
 
         all_tools = list(BUILTIN_TOOLS) if tools_allowed_for_model else []
+        if (image_model or "").strip():
+            all_tools = list(all_tools)
+            all_tools.append(GENERATE_IMAGE_TOOL)
         if tools and tools_allowed_for_model:
             all_tools.extend(tools)
         if mcp_manager:
@@ -706,6 +753,7 @@ class LLMService:
                         return {
                             "content": "⚠️ Something went wrong while contacting the language model.",
                             "embeds": [],
+                            "image_urls": image_urls,
                             "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
                         }
                 else:
@@ -713,6 +761,7 @@ class LLMService:
                     return {
                         "content": "⚠️ Something went wrong while contacting the language model.",
                         "embeds": [],
+                        "image_urls": image_urls,
                         "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
                     }
 
@@ -760,6 +809,7 @@ class LLMService:
                         return {
                             "content": "",
                             "embeds": embeds,
+                            "image_urls": image_urls,
                             "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
                         }
                     content = (
@@ -783,6 +833,7 @@ class LLMService:
                 return {
                     "content": content,
                     "embeds": embeds,
+                    "image_urls": image_urls,
                     "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
                 }
 
@@ -800,6 +851,40 @@ class LLMService:
                     result = await mcp_manager.call_tool(guild_id, fn_name, fn_args)
                 elif custom_functions and fn_name in custom_functions:
                     result = _execute_custom_function(fn_name, custom_functions[fn_name], fn_args)
+                elif fn_name == "generate_image":
+                    img_mdl = (image_model or "").strip()
+                    if not img_mdl:
+                        result = json.dumps(
+                            {"ok": False, "error": "Image generation is not configured for this server."}
+                        )
+                    else:
+                        prompt_text = str(fn_args.get("prompt") or "").strip()
+                        if not prompt_text:
+                            result = json.dumps({"ok": False, "error": "Missing prompt for generate_image."})
+                        else:
+                            size = str(fn_args.get("size") or "1024x1024")
+                            if size not in _ALLOWED_IMAGE_SIZES:
+                                size = "1024x1024"
+                            quality = str(fn_args.get("quality") or "standard")
+                            if quality not in ("standard", "hd"):
+                                quality = "standard"
+                            style = str(fn_args.get("style") or "vivid")
+                            if style not in ("vivid", "natural"):
+                                style = "vivid"
+                            url = await self.generate_image(
+                                prompt_text,
+                                model=img_mdl,
+                                size=size,
+                                quality=quality,
+                                style=style,
+                            )
+                            if url:
+                                image_urls.append(url)
+                                result = json.dumps({"ok": True, "image_url": url})
+                            else:
+                                result = json.dumps(
+                                    {"ok": False, "error": "Image generation failed (provider rejected the request)."}
+                                )
                 else:
                     result = _execute_builtin_tool(fn_name, fn_args)
 
@@ -831,6 +916,7 @@ class LLMService:
                 return {
                     "content": "",
                     "embeds": embeds,
+                    "image_urls": image_urls,
                     "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
                 }
 
@@ -838,6 +924,7 @@ class LLMService:
         return {
             "content": "I ran out of steps while processing tool calls.",
             "embeds": embeds,
+            "image_urls": image_urls,
             "usage": {"prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens},
         }
 
