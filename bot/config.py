@@ -28,6 +28,10 @@ class Config:
     llm_api_key: str = field(
         default_factory=lambda: os.getenv("LLM_API_KEY", "no-key-needed")
     )
+    # Model discovery: use LiteLLM proxy routes (e.g. /v1/model/info) when the hostname does not contain "litellm".
+    llm_litellm_proxy: bool = field(
+        default_factory=lambda: os.getenv("LLM_LITELLM_PROXY", "").strip().lower() in ("1", "true", "yes", "on")
+    )
     # Verbose LLM tracing to stdout (set on the remote host / container). Never logs secrets.
     llm_debug: bool = field(
         default_factory=lambda: os.getenv("LLM_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")

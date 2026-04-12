@@ -6,7 +6,6 @@ from different LLM providers like OpenAI, LiteLLM, OpenRouter, etc.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -20,6 +19,15 @@ if TYPE_CHECKING:
     from bot.config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _ollama_http_root(base_url: str) -> str:
+    """Strip a trailing ``/v1`` so Ollama native routes (``/api/tags``) hit port 11434, not ``/v1/api/...``."""
+    base = base_url.rstrip("/")
+    if base.lower().endswith("/v1"):
+        return base[:-3]
+    return base
+
 
 _MODEL_ALIAS_OVERRIDES: dict[str, str] = {
     "qwen35": "qwen3.5",
@@ -277,13 +285,14 @@ class ModelDiscoveryService:
             return "openai"
         elif "openrouter.ai" in url_lower:
             return "openrouter"
-        elif "litellm" in url_lower:
+        elif "litellm" in url_lower or bool(getattr(self.config, "llm_litellm_proxy", False)):
             return "litellm"
+        elif ":11434" in url_lower:
+            # Ollama default port (LAN, Docker service names, etc.)
+            return "ollama"
         elif "localhost" in url_lower or "127.0.0.1" in url_lower:
             # Could be Ollama, LM Studio, vLLM, etc.
-            if ":11434" in url_lower:
-                return "ollama"
-            elif ":1234" in url_lower:
+            if ":1234" in url_lower:
                 return "lm_studio"
             elif ":8000" in url_lower:
                 return "vllm"
@@ -397,18 +406,123 @@ class ModelDiscoveryService:
                 
                 return models
     
+    def _openai_compatible_auth_headers(self) -> dict[str, str]:
+        if not self.api_key or self.api_key == "no-key-needed":
+            return {}
+        return {"Authorization": f"Bearer {self.api_key}"}
+
+    def _litellm_model_info_probe_urls(self) -> list[str]:
+        """LiteLLM exposes rich deployments on /model/info (with or without /v1 prefix)."""
+        base = self.base_url.rstrip("/")
+        urls = [f"{base}/model/info", f"{base}/v1/model/info"]
+        if base.lower().endswith("/v1"):
+            root = base[:-3].rstrip("/")
+            for u in (f"{root}/model/info", f"{root}/v1/model/info"):
+                if u not in urls:
+                    urls.append(u)
+        return list(dict.fromkeys(urls))
+
+    async def _try_litellm_proxy_model_info(self) -> list[dict[str, Any]] | None:
+        headers = self._openai_compatible_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=25)
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for url in self._litellm_model_info_probe_urls():
+                try:
+                    async with session.get(url, timeout=timeout) as response:
+                        if response.status != 200:
+                            continue
+                        data = await response.json()
+                        raw = data.get("data")
+                        if isinstance(raw, list) and raw:
+                            logger.info("LiteLLM model info: %d deployments from %s", len(raw), url)
+                            return raw
+                except Exception as exc:
+                    logger.debug("LiteLLM model info probe failed for %s: %s", url, exc)
+        return None
+
+    def _model_info_from_litellm_entry(
+        self, item: dict[str, Any], model_type: str
+    ) -> ModelInfo | None:
+        model_id = (item.get("model_name") or "").strip()
+        if not model_id:
+            return None
+        mi = item.get("model_info") if isinstance(item.get("model_info"), dict) else {}
+        mode = str(mi.get("mode") or "").strip().lower()
+        provider_label = str(mi.get("litellm_provider") or "LiteLLM")
+        ctx = mi.get("max_input_tokens") or mi.get("max_tokens") or mi.get("max_output_tokens")
+        ctx_int = int(ctx) if isinstance(ctx, (int, float)) else None
+        caps = mi.get("capabilities") if isinstance(mi.get("capabilities"), list) else None
+
+        if model_type == "embedding":
+            if mode == "embedding" or self._is_embedding_model(model_id):
+                return ModelInfo(
+                    id=model_id,
+                    name=self._format_model_name(model_id),
+                    provider=provider_label,
+                    type="embedding",
+                    context_length=ctx_int,
+                    capabilities=caps,
+                )
+            return None
+
+        if model_type == "image":
+            if mode in ("image_generation", "image") or self._is_image_model(model_id):
+                return ModelInfo(
+                    id=model_id,
+                    name=self._format_model_name(model_id),
+                    provider=provider_label,
+                    type="image",
+                    context_length=ctx_int,
+                    capabilities=caps,
+                )
+            return None
+
+        # chat
+        if mode == "embedding" or self._is_embedding_model(model_id):
+            return None
+        if mode in ("image_generation",) or self._is_image_model(model_id):
+            return None
+        if mode in ("audio_transcription", "rerank", "moderation", "batch"):
+            return None
+        if not self._is_chat_model(model_id):
+            return None
+        return ModelInfo(
+            id=model_id,
+            name=self._format_model_name(model_id),
+            provider=provider_label,
+            type="chat",
+            context_length=ctx_int,
+            capabilities=caps,
+        )
+
     async def _fetch_litellm_models(self, model_type: str) -> List[ModelInfo]:
         """Fetch models from LiteLLM proxy.
-        
-        Note: LiteLLM doesn't have a standard models endpoint, so we'll try
-        to use the OpenAI-compatible endpoint or return common models.
+
+        Prefer ``/v1/model/info`` (or ``/model/info``): it lists every model deployment
+        (including proxied Ollama names like ``gemma4:31b-cloud``), unlike minimal
+        ``GET /v1/models``. Results are merged with ``GET /v1/models`` so nothing is dropped.
         """
+        by_id: dict[str, ModelInfo] = {}
+
+        raw_entries = await self._try_litellm_proxy_model_info()
+        if raw_entries:
+            for item in raw_entries:
+                info = self._model_info_from_litellm_entry(item, model_type)
+                if info:
+                    by_id.setdefault(info.id, info)
+
         try:
-            # Try OpenAI-compatible endpoint first
-            return await self._fetch_openai_compatible_models(model_type)
-        except Exception:
-            # Fallback to common LiteLLM models
+            for m in await self._fetch_openai_compatible_models(model_type):
+                by_id.setdefault(m.id, m)
+        except Exception as exc:
+            logger.debug("LiteLLM merge: OpenAI-compatible /models failed: %s", exc)
+            if not by_id:
+                return self._get_litellm_fallback_models(model_type)
+
+        if not by_id:
             return self._get_litellm_fallback_models(model_type)
+
+        return sorted(by_id.values(), key=lambda x: x.id.lower())
     
     async def _fetch_local_models(self, provider: str, model_type: str) -> List[ModelInfo]:
         """Fetch models from local providers (Ollama, LM Studio, vLLM)."""
@@ -422,28 +536,78 @@ class ModelDiscoveryService:
             return await self._fetch_openai_compatible_models(model_type)
     
     async def _fetch_ollama_models(self, model_type: str) -> List[ModelInfo]:
-        """Fetch models from Ollama API."""
+        """Fetch models from Ollama API (native ``/api/tags`` plus OpenAI-style ``/v1/models``)."""
+        root = _ollama_http_root(self.base_url)
+        merged: dict[str, int | None] = {}
+
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.base_url}/api/tags") as response:
-                if response.status != 200:
-                    raise Exception(f"Ollama API error: {response.status}")
-                
-                data = await response.json()
-                models = []
-                
-                for model in data.get("models", []):
-                    model_id = model["name"]
-                    
-                    if model_type == "chat":
-                        models.append(ModelInfo(
-                            id=model_id,
-                            name=self._format_model_name(model_id),
-                            provider="Ollama",
-                            type="chat",
-                            context_length=model.get("details", {}).get("context_length"),
-                        ))
-                
-                return models
+            try:
+                async with session.get(f"{root}/api/tags") as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        for model in data.get("models", []):
+                            name = model.get("name")
+                            if not name:
+                                continue
+                            merged[name] = (model.get("details") or {}).get("context_length")
+                    else:
+                        logger.warning("Ollama /api/tags returned HTTP %s", response.status)
+            except Exception as exc:
+                logger.warning("Ollama /api/tags failed: %s", exc)
+
+            try:
+                async with session.get(f"{root}/v1/models") as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        for item in data.get("data", []):
+                            mid = item.get("id")
+                            if not mid:
+                                continue
+                            if mid not in merged:
+                                mctx = item.get("max_context_length")
+                                merged[mid] = int(mctx) if isinstance(mctx, (int, float)) else None
+                    else:
+                        logger.debug("Ollama /v1/models returned HTTP %s", response.status)
+            except Exception as exc:
+                logger.debug("Ollama /v1/models failed: %s", exc)
+
+        if not merged:
+            raise Exception("Ollama returned no models from /api/tags or /v1/models")
+
+        out: list[ModelInfo] = []
+        for model_id in sorted(merged.keys()):
+            ctx = merged[model_id]
+            if model_type == "chat":
+                out.append(
+                    ModelInfo(
+                        id=model_id,
+                        name=self._format_model_name(model_id),
+                        provider="Ollama",
+                        type="chat",
+                        context_length=ctx,
+                    )
+                )
+            elif model_type == "image":
+                out.append(
+                    ModelInfo(
+                        id=model_id,
+                        name=self._format_model_name(model_id),
+                        provider="Ollama",
+                        type="image",
+                        context_length=ctx,
+                    )
+                )
+            elif model_type == "embedding" and self._is_embedding_model(model_id):
+                out.append(
+                    ModelInfo(
+                        id=model_id,
+                        name=self._format_model_name(model_id),
+                        provider="Ollama",
+                        type="embedding",
+                        context_length=ctx,
+                    )
+                )
+        return out
     
     async def _fetch_lm_studio_models(self, model_type: str) -> List[ModelInfo]:
         """Fetch models from LM Studio API."""

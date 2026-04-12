@@ -58,3 +58,26 @@ class ModelDiscoveryResolutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(service._is_embedding_model("embeddinggemma"))
         self.assertFalse(service._is_chat_model("embeddinggemma"))
+
+    def test_ollama_http_root_strips_trailing_v1(self) -> None:
+        from bot.model_discovery import _ollama_http_root
+
+        self.assertEqual(_ollama_http_root("http://localhost:11434/v1"), "http://localhost:11434")
+        self.assertEqual(_ollama_http_root("http://localhost:11434/v1/"), "http://localhost:11434")
+        self.assertEqual(_ollama_http_root("http://host:11434"), "http://host:11434")
+
+    def test_litellm_model_info_maps_proxied_ollama_gemma(self) -> None:
+        service = self._make_service()
+        item = {
+            "model_name": "gemma4:31b-cloud",
+            "litellm_params": {"model": "ollama/gemma4:31b-cloud"},
+            "model_info": {"mode": "chat", "litellm_provider": "ollama"},
+        }
+        chat = service._model_info_from_litellm_entry(item, "chat")
+        self.assertIsNotNone(chat)
+        assert chat is not None
+        self.assertEqual(chat.id, "gemma4:31b-cloud")
+        self.assertEqual(chat.type, "chat")
+
+        emb = service._model_info_from_litellm_entry(item, "embedding")
+        self.assertIsNone(emb)
