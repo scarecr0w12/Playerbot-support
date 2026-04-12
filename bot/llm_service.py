@@ -113,6 +113,34 @@ def _message_content_to_text(content: Any) -> str:
     return str(content)
 
 
+def _message_dict_extra_strings(message: Any) -> dict[str, Any]:
+    """Best-effort dict view of a completion message (SDK / gateway quirks)."""
+    if message is None:
+        return {}
+    if isinstance(message, dict):
+        return message
+    md = getattr(message, "model_dump", None)
+    if callable(md):
+        try:
+            dumped = md()
+            if isinstance(dumped, dict):
+                return dumped
+        except Exception:
+            pass
+    return {}
+
+
+def _qwen_disable_thinking_extra(model_id: str) -> bool:
+    """Ask Qwen3-style servers for non-separated mode when possible (LM Studio / vLLM)."""
+    m = (model_id or "").lower()
+    if "qwen3" not in m and "/qwen3" not in m:
+        return False
+    # Explicit thinking checkpoints should keep server defaults.
+    if re.search(r"[-_/]thinking", m) or m.endswith("thinking"):
+        return False
+    return True
+
+
 def _assistant_message_visible_text(message: Any) -> str:
     """Visible reply text from a chat completion message object."""
     text = _message_content_to_text(getattr(message, "content", None)).strip()
@@ -123,6 +151,20 @@ def _assistant_message_visible_text(message: Any) -> str:
         raw = getattr(message, attr, None)
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
+    # LM Studio (reasoning/content split) and vLLM (--reasoning-parser) often put the
+    # assistant text only in reasoning_content or reasoning while content is empty.
+    for attr in ("reasoning_content", "reasoning"):
+        raw = getattr(message, attr, None)
+        if isinstance(raw, str) and raw.strip():
+            cleaned = _strip_thinking_xml_from_str(raw).strip()
+            if cleaned:
+                return cleaned
+    for key in ("reasoning_content", "reasoning"):
+        raw = _message_dict_extra_strings(message).get(key)
+        if isinstance(raw, str) and raw.strip():
+            cleaned = _strip_thinking_xml_from_str(raw).strip()
+            if cleaned:
+                return cleaned
     return ""
 
 
@@ -411,6 +453,9 @@ class LLMService:
         self._llm_log_origin: str = _safe_llm_origin(config.llm_base_url)
         self._llm_base_url: str = config.llm_base_url
         self._llm_reasoning_effort: str | None = getattr(config, "llm_reasoning_effort", None)
+        self._llm_skip_qwen_chat_template_kwargs: bool = bool(
+            getattr(config, "llm_skip_qwen_chat_template_kwargs", False)
+        )
 
     @staticmethod
     def _normalize_fact_category(category: Any) -> str:
@@ -555,6 +600,14 @@ class LLMService:
             extra_body: dict[str, Any] = {}
             if effort:
                 extra_body["reasoning_effort"] = effort
+            if _qwen_disable_thinking_extra(mdl) and not getattr(
+                self, "_llm_skip_qwen_chat_template_kwargs", False
+            ):
+                ctk = extra_body.get("chat_template_kwargs")
+                if isinstance(ctk, dict):
+                    ctk.setdefault("enable_thinking", False)
+                elif ctk is None:
+                    extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             if extra_body:
                 kwargs["extra_body"] = extra_body
             if all_tools:

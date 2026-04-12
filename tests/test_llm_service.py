@@ -8,6 +8,7 @@ from bot.llm_service import (
     LLMService,
     _assistant_message_visible_text,
     _message_content_to_text,
+    _qwen_disable_thinking_extra,
     extended_reasoning_model,
 )
 
@@ -167,6 +168,20 @@ class LLMServiceCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         msg = SimpleNamespace(content=[{"type": "text", "text": "Done."}])
         self.assertEqual(_assistant_message_visible_text(msg), "Done.")
 
+    def test_assistant_message_visible_text_falls_back_to_reasoning_content(self) -> None:
+        """LM Studio / vLLM may return empty content with the reply in reasoning_content."""
+        msg = SimpleNamespace(content="", reasoning_content="Hello from reasoning field.")
+        self.assertEqual(_assistant_message_visible_text(msg), "Hello from reasoning field.")
+
+    def test_assistant_message_visible_text_falls_back_to_reasoning_attr(self) -> None:
+        msg = SimpleNamespace(content=None, reasoning="Answer via vLLM reasoning key.")
+        self.assertEqual(_assistant_message_visible_text(msg), "Answer via vLLM reasoning key.")
+
+    def test_qwen_disable_thinking_extra_heuristic(self) -> None:
+        self.assertTrue(_qwen_disable_thinking_extra("qwen/qwen3.5-35b-a3b"))
+        self.assertTrue(_qwen_disable_thinking_extra("Qwen/Qwen3-30B-A3B-Instruct-2507"))
+        self.assertFalse(_qwen_disable_thinking_extra("Qwen/Qwen3-235B-A22B-Thinking-2507"))
+
     def test_extended_reasoning_model_heuristic(self) -> None:
         self.assertTrue(extended_reasoning_model("o3-mini"))
         self.assertTrue(extended_reasoning_model("deepseek-ai/DeepSeek-R1"))
@@ -222,6 +237,29 @@ class LLMServiceCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kw.get("max_tokens"), 512)
         self.assertNotIn("max_completion_tokens", kw)
         self.assertEqual(kw.get("temperature"), 0.2)
+
+    async def test_get_response_adds_qwen_chat_template_kwargs(self) -> None:
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        llm, create = self._make_service([response])
+        llm._llm_base_url = "http://localhost:1234/v1"
+        llm._llm_skip_qwen_chat_template_kwargs = False
+
+        await llm.get_response(
+            [{"role": "user", "content": "x"}],
+            system_prompt="s",
+            model="qwen3.5-27b",
+        )
+        kw = create.await_args.kwargs
+        eb = kw.get("extra_body") or {}
+        self.assertEqual(eb.get("chat_template_kwargs"), {"enable_thinking": False})
 
     async def test_get_response_forwards_reasoning_effort_in_extra_body(self) -> None:
         response = SimpleNamespace(

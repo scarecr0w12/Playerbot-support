@@ -39,6 +39,11 @@ class Config:
         and v
         or None
     )
+    # If set, do not send extra_body chat_template_kwargs for Qwen3 (some proxies reject it).
+    llm_skip_qwen_chat_template_kwargs: bool = field(
+        default_factory=lambda: os.getenv("LLM_SKIP_QWEN_CHAT_TEMPLATE_KWARGS", "").strip().lower()
+        in ("1", "true", "yes", "on")
+    )
 
     # ── Bot-level system prompt (prepended to every guild's prompt) ──
     # Set this in .env to enforce a foundation that cannot be overridden
