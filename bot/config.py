@@ -28,6 +28,17 @@ class Config:
     llm_api_key: str = field(
         default_factory=lambda: os.getenv("LLM_API_KEY", "no-key-needed")
     )
+    # Verbose LLM tracing to stdout (set on the remote host / container). Never logs secrets.
+    llm_debug: bool = field(
+        default_factory=lambda: os.getenv("LLM_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+    )
+    # Optional: forwarded to OpenAI-compatible APIs as extra_body["reasoning_effort"]
+    # (e.g. low / medium / high). Empty = omit.
+    llm_reasoning_effort: str | None = field(
+        default_factory=lambda: (v := os.getenv("LLM_REASONING_EFFORT", "").strip().lower())
+        and v
+        or None
+    )
 
     # ── Bot-level system prompt (prepended to every guild's prompt) ──
     # Set this in .env to enforce a foundation that cannot be overridden

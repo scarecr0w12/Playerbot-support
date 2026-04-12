@@ -10,6 +10,7 @@ import math
 import re
 import struct
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from openai import AsyncOpenAI
 
@@ -20,11 +21,71 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _safe_llm_origin(base_url: str) -> str:
+    """Host (and scheme) for logs — no path, query, or credentials."""
+    try:
+        p = urlparse(base_url)
+        if p.netloc:
+            return f"{p.scheme}://{p.netloc}" if p.scheme else p.netloc
+        return base_url[:64] if base_url else "(empty)"
+    except Exception:
+        return "(unparseable-url)"
+
+
+def _content_shape_for_log(content: Any, *, max_snippet: int = 160) -> str:
+    """Compact description of assistant message.content for remote debugging."""
+    if content is None:
+        return "null"
+    if isinstance(content, str):
+        s = " ".join(content.split())
+        if not s:
+            return "str(len=0)"
+        if len(s) > max_snippet:
+            return f"str(len={len(content)}):{s[:max_snippet]}…"
+        return f"str(len={len(content)}):{s!r}"
+    if isinstance(content, list):
+        parts: list[str] = []
+        for i, item in enumerate(content[:6]):
+            if isinstance(item, dict):
+                t = item.get("type", "?")
+                keys = [k for k in item if k not in ("image_url",)]
+                parts.append(f"[{i}]type={t!r} keys={keys[:8]}")
+            else:
+                parts.append(f"[{i}]{type(item).__name__}")
+        tail = f" +{len(content) - 6} more" if len(content) > 6 else ""
+        return f"list(n={len(content)}): " + "; ".join(parts) + tail
+    return f"{type(content).__name__}:{repr(content)[:max_snippet]}"
+
+
+# Content parts tagged as internal chain-of-thought must not be shown to users.
+_THINKING_PART_TYPES = frozenset(
+    {"reasoning", "thinking", "redacted_thinking", "internal", "chain_of_thought", "cot"}
+)
+
+# Qwen3 / DeepSeek-style templates sometimes leave fenced thinking in plain string content.
+_THINK_XML_STRIP_RES = tuple(
+    re.compile(rf"<{tag}>.*?</{tag}>\s*", re.IGNORECASE | re.DOTALL)
+    for tag in ("redacted_thinking", "redacted_reasoning")
+)
+
+
+def _strip_thinking_xml_from_str(text: str) -> str:
+    if not text or "<" not in text:
+        return text
+    lower = text.lower()
+    if "redacted_thinking" not in lower and "redacted_reasoning" not in lower:
+        return text
+    for pat in _THINK_XML_STRIP_RES:
+        text = pat.sub("", text)
+    return text.strip()
+
+
 def _message_content_to_text(content: Any) -> str:
+    """Extract user-visible assistant text from ``message.content``."""
     if content is None:
         return ""
     if isinstance(content, str):
-        return content
+        return _strip_thinking_xml_from_str(content)
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
@@ -32,10 +93,13 @@ def _message_content_to_text(content: Any) -> str:
                 parts.append(item)
                 continue
             if isinstance(item, dict):
+                part_type = str(item.get("type") or "").lower()
+                if part_type in _THINKING_PART_TYPES:
+                    continue
                 text = item.get("text") or item.get("content")
                 if not isinstance(text, str):
-                    # Some OpenAI-compatible / aggregator APIs use alternate keys.
-                    for key in ("reasoning", "reasoning_content", "output_text", "value"):
+                    # Non-thinking structured segments (e.g. some proxies).
+                    for key in ("output_text", "value"):
                         alt = item.get(key)
                         if isinstance(alt, str) and alt.strip():
                             text = alt
@@ -47,6 +111,63 @@ def _message_content_to_text(content: Any) -> str:
                     parts.append(item["value"])
         return "\n".join(part.strip() for part in parts if part and part.strip())
     return str(content)
+
+
+def _assistant_message_visible_text(message: Any) -> str:
+    """Visible reply text from a chat completion message object."""
+    text = _message_content_to_text(getattr(message, "content", None)).strip()
+    if text:
+        return text
+    # Rare: some gateways only populate legacy string fields.
+    for attr in ("output_text",):
+        raw = getattr(message, attr, None)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return ""
+
+
+def extended_reasoning_model(model_id: str) -> bool:
+    """Heuristic: model likely allocates separate reasoning vs visible completion tokens."""
+    mid = (model_id or "").lower()
+    if not mid:
+        return False
+    needles = (
+        "thinking",
+        "reasoning",
+        "deepseek-r1",
+        "deepseek-reasoner",
+        "qwq",
+        "reflection",
+        "gpt-5",
+        "o1",
+        "o3",
+        "o4-mini",
+    )
+    if any(n in mid for n in needles):
+        return True
+    # OpenAI o-series ids are short (e.g. o3, o4-mini-2025-04-16)
+    if re.match(r"^o\d", mid):
+        return True
+    return False
+
+
+def _openai_chat_completions_host(base_url: str) -> bool:
+    u = (base_url or "").lower()
+    return "api.openai.com" in u
+
+
+def _openai_style_completion_budget(base_url: str, model_id: str) -> bool:
+    """Use ``max_completion_tokens`` (reasoning+answer) instead of ``max_tokens``."""
+    if not _openai_chat_completions_host(base_url):
+        return False
+    return extended_reasoning_model(model_id)
+
+
+def _openai_strict_sampling(base_url: str, model_id: str) -> bool:
+    """Official OpenAI reasoning models reject custom ``temperature``."""
+    if not _openai_chat_completions_host(base_url):
+        return False
+    return extended_reasoning_model(model_id)
 
 _FACT_ALLOWED_CATEGORIES = {
     "user_preference",
@@ -286,6 +407,10 @@ class LLMService:
             api_key=config.llm_api_key,
         )
         self._tool_support_by_model: dict[str, bool] = {}
+        self._llm_debug: bool = bool(config.llm_debug)
+        self._llm_log_origin: str = _safe_llm_origin(config.llm_base_url)
+        self._llm_base_url: str = config.llm_base_url
+        self._llm_reasoning_effort: str | None = getattr(config, "llm_reasoning_effort", None)
 
     @staticmethod
     def _normalize_fact_category(category: Any) -> str:
@@ -351,6 +476,7 @@ class LLMService:
         mcp_manager: "MCPManager | None" = None,
         guild_id: int = 0,
         custom_functions: dict[str, str] | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         """Send a chat completion request and handle tool calls.
 
@@ -388,14 +514,49 @@ class LLMService:
         total_prompt_tokens = 0
         total_completion_tokens = 0
         embeds: list[dict] = []
+        llm_debug = getattr(self, "_llm_debug", False)
+        llm_origin = getattr(self, "_llm_log_origin", "(unknown)")
+        base_url = getattr(self, "_llm_base_url", "") or ""
+        effort = reasoning_effort if reasoning_effort is not None else getattr(
+            self, "_llm_reasoning_effort", None
+        )
+        use_completion_budget = _openai_style_completion_budget(base_url, mdl)
+        strict_sampling = _openai_strict_sampling(base_url, mdl)
 
-        for _ in range(max_tool_rounds):
+        if llm_debug:
+            logger.info(
+                "LLM get_response start guild_id=%s origin=%s model=%s history_msgs=%d "
+                "tool_defs=%d allow_tools=%s temp=%s max_out=%s reasoning_effort=%s "
+                "completion_budget=%s strict_sampling=%s",
+                guild_id,
+                llm_origin,
+                mdl,
+                len(conversation_history),
+                len(all_tools),
+                allow_tools,
+                temperature,
+                max_tokens,
+                effort,
+                use_completion_budget,
+                strict_sampling,
+            )
+
+        for round_idx in range(max_tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": mdl,
                 "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
             }
+            if not strict_sampling:
+                kwargs["temperature"] = temperature
+            if use_completion_budget:
+                kwargs["max_completion_tokens"] = max_tokens
+            else:
+                kwargs["max_tokens"] = max_tokens
+            extra_body: dict[str, Any] = {}
+            if effort:
+                extra_body["reasoning_effort"] = effort
+            if extra_body:
+                kwargs["extra_body"] = extra_body
             if all_tools:
                 kwargs["tools"] = all_tools
                 kwargs["tool_choice"] = "auto"
@@ -403,7 +564,17 @@ class LLMService:
             retried_without_tools = False
             try:
                 response = await self._client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
-            except Exception:
+            except Exception as exc:
+                if llm_debug:
+                    logger.info(
+                        "LLM HTTP error round=%d guild_id=%s model=%s had_tools=%s exc_type=%s exc=%r",
+                        round_idx + 1,
+                        guild_id,
+                        mdl,
+                        bool(kwargs.get("tools")),
+                        type(exc).__name__,
+                        exc,
+                    )
                 if kwargs.get("tools"):
                     tool_support[mdl] = False
                     logger.warning("LLM request with tools failed for model %s; retrying without tools", mdl, exc_info=True)
@@ -438,18 +609,44 @@ class LLMService:
                 total_completion_tokens += usage.completion_tokens
 
             tool_calls = list(getattr(choice.message, "tool_calls", None) or [])
+            raw_content = choice.message.content
+            refusal = getattr(choice.message, "refusal", None)
+
+            if llm_debug:
+                tc_names = [getattr(getattr(tc, "function", None), "name", "?") for tc in tool_calls]
+                u_prompt = getattr(usage, "prompt_tokens", None) if usage else None
+                u_compl = getattr(usage, "completion_tokens", None) if usage else None
+                logger.info(
+                    "LLM completion round=%d/%d guild_id=%s model=%s finish_reason=%s "
+                    "tool_calls=%s usage_this=(prompt=%s, completion=%s) raw_content=%s refusal=%s",
+                    round_idx + 1,
+                    max_tool_rounds,
+                    guild_id,
+                    mdl,
+                    getattr(choice, "finish_reason", None),
+                    tc_names,
+                    u_prompt,
+                    u_compl,
+                    _content_shape_for_log(raw_content),
+                    (refusal[:200] + "…") if isinstance(refusal, str) and len(refusal) > 200 else refusal,
+                )
 
             # No tool calls — return final text
             if not tool_calls:
-                content = _message_content_to_text(choice.message.content).strip()
-                refusal = getattr(choice.message, "refusal", None)
+                content = _assistant_message_visible_text(choice.message)
                 if not content and isinstance(refusal, str) and refusal.strip():
                     content = refusal.strip()
                 if not content and not embeds:
                     logger.warning(
-                        "LLM returned empty assistant message (model=%s, finish_reason=%s)",
+                        "LLM returned empty assistant message (guild_id=%s model=%s round=%d "
+                        "finish_reason=%s raw_content=%s refusal_present=%s embeds_collected=%d)",
+                        guild_id,
                         mdl,
+                        round_idx + 1,
                         getattr(choice, "finish_reason", None),
+                        _content_shape_for_log(raw_content),
+                        bool(isinstance(refusal, str) and refusal.strip()),
+                        len(embeds),
                     )
                 return {
                     "content": content,

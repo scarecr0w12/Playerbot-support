@@ -39,6 +39,20 @@ class ModelDiscoveryResolutionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resolved, "qwen3.5")
 
+    async def test_resolve_model_id_qwen35_matches_hf_style_checkpoint(self) -> None:
+        """Guilds often configure qwen3.5 while LM Studio / vLLM expose a long HF id."""
+        hf_id = "Qwen/Qwen3-30B-A3B-Instruct-2507"
+        service = self._make_service()
+        service.get_available_models = AsyncMock(
+            return_value=[
+                ModelInfo(hf_id, "Qwen3 30B", "API", "chat"),
+            ]
+        )
+
+        resolved = await service.resolve_model_id("qwen3.5", "chat")
+
+        self.assertEqual(resolved, hf_id)
+
     def test_embeddinggemma_is_detected_as_embedding_model(self) -> None:
         service = self._make_service()
 

@@ -28,9 +28,64 @@ _MODEL_ALIAS_OVERRIDES: dict[str, str] = {
     "qwen3397b": "qwen3.5",
     "qwen3.5397b": "qwen3.5",
     "qwen3.5397binstruct": "qwen3.5",
+    "qwen3530b": "qwen3.5",
+    "qwen3530ba3binstruct": "qwen3.5",
     "qwen3embedding8b": "qwen3-embedding-8b",
     "embeddinggemma": "embeddinggemma",
 }
+
+
+def _qwen3_chat_family_lookup_keys(model_id: str) -> set[str]:
+    """Extra lookup keys so a guild can store qwen3.5 while the API lists HF-style ids."""
+    lower = model_id.lower()
+    keys: set[str] = set()
+    if "embedding" in lower:
+        return keys
+    if "qwen2" in lower:
+        return keys
+
+    compact = re.sub(r"[^a-z0-9]+", "", lower)
+    if "qwen3.5" in lower or compact == "qwen35" or compact.startswith("qwen35397b"):
+        keys.add("qwen35")
+        keys.add("qwen3530b")
+        return keys
+
+    is_qwen3 = (
+        "qwen3-" in lower
+        or "qwen3." in lower
+        or "qwen3_" in lower
+        or lower.startswith("qwen3")
+        or "/qwen3" in lower
+        or lower.startswith("qwen/qwen3")
+    )
+    if not is_qwen3:
+        return keys
+
+    size_or_role = (
+        "instruct",
+        "thinking",
+        "chat",
+        "next",
+        "a3b",
+        "2507",
+        "2504",
+        "30b",
+        "32b",
+        "235b",
+        "48b",
+        "14b",
+        "8b",
+        "4b",
+        "0.6b",
+        "1.7b",
+    )
+    if not any(tok in lower for tok in size_or_role):
+        return keys
+
+    keys.add("qwen35")
+    if "30b" in lower or "32b" in lower:
+        keys.add("qwen3530b")
+    return keys
 
 
 @dataclass
@@ -209,6 +264,8 @@ class ModelDiscoveryService:
             keys.add(normalized.removesuffix("instruct"))
         if normalized.endswith("chat"):
             keys.add(normalized.removesuffix("chat"))
+
+        keys |= _qwen3_chat_family_lookup_keys(value)
 
         return [key for key in keys if key]
     
@@ -486,6 +543,7 @@ class ModelDiscoveryService:
             r"gemini-",
             r"command-",
             r"qwen-",
+            r"qwen3[\._\-/]",  # Qwen3 / Qwen3.5 ids without a digit immediately after ``qwen`` only
             r"qwen\d",
             r"\bqwen\b",
             r"yi-",
@@ -598,6 +656,8 @@ class ModelDiscoveryService:
         """Get fallback models when API calls fail."""
         common_models = {
             "chat": [
+                ModelInfo("qwen3.5", "Qwen 3.5", "Fallback", "chat"),
+                ModelInfo("Qwen/Qwen3-30B-A3B-Instruct-2507", "Qwen3 30B A3B Instruct", "Fallback", "chat"),
                 ModelInfo("gpt-3.5-turbo", "GPT 3.5 Turbo", "Fallback", "chat"),
                 ModelInfo("gpt-4", "GPT 4", "Fallback", "chat"),
                 ModelInfo("gpt-4-turbo", "GPT 4 Turbo", "Fallback", "chat"),

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from bot.qdrant_service import QdrantService
 
+from bot.llm_service import extended_reasoning_model
 from bot.config import Config, DEFAULTS
 from bot.crawler import WebCrawler
 from bot.model_discovery import ModelDiscoveryService
@@ -581,6 +582,16 @@ class SupportCog(commands.Cog, name="Support"):
         temperature = await self._get_temperature(guild_id) if guild else float(DEFAULTS["assistant_temperature"])
         max_tokens = await self._get_max_tokens(guild_id) if guild else int(DEFAULTS["assistant_max_tokens"])
 
+        if extended_reasoning_model(model):
+            system_prompt += (
+                "\n\nYou are running with extended internal reasoning capacity. "
+                "Use it to interpret the question precisely, verify claims against any "
+                "context you were given, resolve ambiguities, and plan tool use before "
+                "calling functions. "
+                "In the user-visible answer, stay concise and actionable—do not expose "
+                "private chain-of-thought, step labels, or meta-commentary about how you think."
+            )
+
         result = await self.llm.get_response(
             conversation,
             system_prompt=system_prompt,
@@ -658,6 +669,24 @@ class SupportCog(commands.Cog, name="Support"):
         elif discord_embeds:
             await send_func(embeds=discord_embeds[:10], view=view)
         else:
+            gid = feedback_ctx.get("guild_id") if feedback_ctx else None
+            cid = feedback_ctx.get("channel_id") if feedback_ctx else None
+            uid = feedback_ctx.get("user_id") if feedback_ctx else None
+            extra: dict[str, Any] | None = None
+            if self._config.llm_debug:
+                extra = {
+                    "content_len": len(result.get("content") or ""),
+                    "embeds_n": len(result.get("embeds") or []),
+                    "usage": result.get("usage"),
+                }
+            logger.warning(
+                "Assistant reply has no text and no embeds (user sees fallback). "
+                "guild_id=%s channel_id=%s user_id=%s llm_debug_detail=%s",
+                gid,
+                cid,
+                uid,
+                extra,
+            )
             await send_func("I couldn't generate a response.")
 
     # ==================================================================
