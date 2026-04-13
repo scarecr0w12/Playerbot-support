@@ -338,7 +338,14 @@ async def get_all_guilds() -> list[dict[str, Any]]:
             FROM guilds
             ORDER BY guild_id
         """
-    return await db_fetchall(query)
+    rows = await db_fetchall(query)
+    for row in rows:
+        if row.get("guild_id") is not None:
+            try:
+                row["guild_id"] = int(row["guild_id"])
+            except (TypeError, ValueError):
+                pass
+    return rows
 
 
 async def get_guild_config_map(guild_id: int) -> dict[str, str]:
