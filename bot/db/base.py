@@ -153,4 +153,16 @@ class BaseDatabase:
                 )
                 logger.info("Migration: rebuilt assistant_triggers with id column")
 
+        cur = await self._db.execute("PRAGMA table_info(giveaways)")  # type: ignore[union-attr]
+        giveaway_cols = {row[1] for row in await cur.fetchall()}
+        for col, defn in [
+            ("message_id", "INTEGER"),
+            ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ]:
+            if col not in giveaway_cols:
+                await self._db.execute(  # type: ignore[union-attr]
+                    f"ALTER TABLE giveaways ADD COLUMN {col} {defn}"
+                )
+                logger.info("Migration: added %s to giveaways", col)
+
         await self._db.commit()  # type: ignore[union-attr]
