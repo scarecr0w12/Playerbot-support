@@ -89,7 +89,7 @@ def _giveaway_embed(
 
 
 class GiveawayEntryView(discord.ui.View):
-    """Persistent button view attached to giveaway messages."""
+    """Persistent button view attached to a specific giveaway message."""
 
     def __init__(self, cog: GiveawayCog, giveaway_id: int) -> None:
         super().__init__(timeout=None)
@@ -97,7 +97,7 @@ class GiveawayEntryView(discord.ui.View):
         self.giveaway_id = giveaway_id
         self.enter_button.custom_id = f"giveaway:enter:{giveaway_id}"
 
-    @discord.ui.button(label="🎉 Enter", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="🎉 Enter", style=discord.ButtonStyle.success, custom_id="giveaway:enter:0")
     async def enter_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self.cog.handle_entry(interaction, self.giveaway_id)
 
@@ -114,18 +114,30 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         await self._restore_active_views()
         self._giveaway_loop.start()
 
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        if interaction.type != discord.InteractionType.component:
+            return
+        custom_id = (interaction.data or {}).get("custom_id", "")
+        if not custom_id.startswith("giveaway:enter:"):
+            return
+        try:
+            giveaway_id = int(custom_id.split(":")[2])
+        except (IndexError, ValueError):
+            return
+        await self.handle_entry(interaction, giveaway_id)
+
     async def cog_unload(self) -> None:
         self._giveaway_loop.cancel()
 
     async def _restore_active_views(self) -> None:
         rows = await self.db.get_active_giveaways()
         for row in rows:
-            view = GiveawayEntryView(self, row["id"])
             msg_id = row["message_id"]
-            if msg_id:
-                self.bot.add_view(view, message_id=int(msg_id))
-            else:
-                self.bot.add_view(view)
+            if not msg_id:
+                continue
+            view = GiveawayEntryView(self, row["id"])
+            self.bot.add_view(view, message_id=int(msg_id))
             self._active_views[row["id"]] = view
 
     # ------------------------------------------------------------------
@@ -138,13 +150,11 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         rows = await self.db.get_active_giveaways()
         for row in rows:
             if row["id"] not in self._active_views:
-                view = GiveawayEntryView(self, row["id"])
                 msg_id = row["message_id"]
                 if msg_id:
+                    view = GiveawayEntryView(self, row["id"])
                     self.bot.add_view(view, message_id=int(msg_id))
-                else:
-                    self.bot.add_view(view)
-                self._active_views[row["id"]] = view
+                    self._active_views[row["id"]] = view
             if row["end_time"] <= now:
                 await self._end_giveaway(row["id"])
 
