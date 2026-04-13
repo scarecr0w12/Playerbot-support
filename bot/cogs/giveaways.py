@@ -131,14 +131,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         self._giveaway_loop.cancel()
 
     async def _restore_active_views(self) -> None:
-        rows = await self.db.get_active_giveaways()
-        for row in rows:
-            msg_id = row["message_id"]
-            if not msg_id:
-                continue
-            view = GiveawayEntryView(self, row["id"])
-            self.bot.add_view(view, message_id=int(msg_id))
-            self._active_views[row["id"]] = view
+        pass  # on_interaction handles all giveaway button clicks centrally
 
     # ------------------------------------------------------------------
     # Background loop: end expired giveaways
@@ -149,12 +142,6 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         now = datetime.now(timezone.utc).isoformat()
         rows = await self.db.get_active_giveaways()
         for row in rows:
-            if row["id"] not in self._active_views:
-                msg_id = row["message_id"]
-                if msg_id:
-                    view = GiveawayEntryView(self, row["id"])
-                    self.bot.add_view(view, message_id=int(msg_id))
-                    self._active_views[row["id"]] = view
             if row["end_time"] <= now:
                 await self._end_giveaway(row["id"])
 
@@ -167,6 +154,8 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
     # ------------------------------------------------------------------
 
     async def handle_entry(self, interaction: discord.Interaction, giveaway_id: int) -> None:
+        if interaction.response.is_done():
+            return
         row = await self.db.get_giveaway(giveaway_id)
         if not row or row["status"] != "active":
             await interaction.response.send_message("❌ This giveaway has ended.", ephemeral=True)
