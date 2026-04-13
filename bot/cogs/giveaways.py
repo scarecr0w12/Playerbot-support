@@ -141,10 +141,16 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
 
     @tasks.loop(seconds=30)
     async def _giveaway_loop(self) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         rows = await self.db.get_active_giveaways()
         for row in rows:
-            if row["end_time"] <= now:
+            try:
+                end_time = datetime.fromisoformat(row["end_time"])
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if end_time <= now:
                 await self._end_giveaway(row["id"])
 
     @_giveaway_loop.before_loop
