@@ -37,6 +37,48 @@ class BirthdayCog(commands.Cog, name="Birthdays"):
         self.birthday_check_task.cancel()
 
     # ------------------------------------------------------------------
+    # Background task: check birthdays once a day
+    # ------------------------------------------------------------------
+
+    @tasks.loop(hours=1)
+    async def birthday_check_task(self) -> None:
+        """Check for today's birthdays and send announcements."""
+        today = datetime.now(timezone.utc)
+        today_str = today.strftime("%m-%d")
+        date_str = today.strftime("%Y-%m-%d")
+
+        for guild in self.bot.guilds:
+            channel_raw = await self.db.get_guild_config(guild.id, "birthday_channel")
+            if not channel_raw:
+                continue
+            channel = guild.get_channel(int(channel_raw))
+            if not isinstance(channel, discord.TextChannel):
+                continue
+
+            birthdays = await self.db.get_birthdays_by_date(guild.id, today_str)
+            for row in birthdays:
+                user_id = row["user_id"]
+                already_sent = await self.db.check_birthday_announced(guild.id, user_id, date_str)
+                if already_sent:
+                    continue
+                member = guild.get_member(user_id)
+                if not member:
+                    continue
+                try:
+                    await channel.send(
+                        f"🎂 Happy Birthday, {member.mention}! Wishing you a wonderful day! 🎉"
+                    )
+                    await self.db.record_birthday_announcement(guild.id, user_id, date_str)
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning("Failed to send birthday announcement in guild %s: %s", guild.id, e)
+
+            await self.db.cleanup_old_birthday_announcements(guild.id)
+
+    @birthday_check_task.before_loop
+    async def before_birthday_check(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ------------------------------------------------------------------
     # Birthday command group
     # ------------------------------------------------------------------
 
