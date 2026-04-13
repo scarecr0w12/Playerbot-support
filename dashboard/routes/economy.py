@@ -312,6 +312,7 @@ def init(templates: Jinja2Templates) -> APIRouter:
         host_id = int(user.get("id", 0))
 
         try:
+            giveaway_id = None
             async with aiosqlite.connect(DB_PATH) as _db:
                 _db.row_factory = aiosqlite.Row
                 cur = await _db.execute(
@@ -321,43 +322,46 @@ def init(templates: Jinja2Templates) -> APIRouter:
                 )
                 await _db.commit()
                 giveaway_id = cur.lastrowid
-
-                embed = _giveaway_embed_payload(
-                    giveaway_id=giveaway_id,
-                    prize=prize,
-                    end_time=end_dt,
-                    winner_count=winner_count,
-                    host_id=host_id,
-                )
-                components = [
-                    {
-                        "type": 1,
-                        "components": [
-                            {
-                                "type": 2,
-                                "style": 3,
-                                "label": "🎉 Enter",
-                                "custom_id": f"giveaway:enter:{giveaway_id}",
-                            }
-                        ],
-                    }
-                ]
-                msg = await _discord_post_message(channel_id, embed, components)
-                if msg:
-                    await _db.execute(
-                        "UPDATE giveaways SET message_id = ? WHERE id = ?",
-                        (int(msg["id"]), giveaway_id),
-                    )
-                    await _db.commit()
-                    request.session["flash_ok"] = f"Giveaway #{giveaway_id} launched in Discord!"
-                else:
-                    request.session["flash_error"] = (
-                        f"Giveaway #{giveaway_id} saved but could not post to Discord "
-                        f"(check DISCORD_BOT_TOKEN and bot access to channel {channel_id})."
-                    )
         except Exception as exc:
             logger.exception("Failed to create giveaway: %s", exc)
-            request.session["flash_error"] = f"Error: {exc}"
+            request.session["flash_error"] = f"Error creating giveaway: {exc}"
+            return RedirectResponse(f"/giveaways?guild_id={guild_id}&status=active", status_code=302)
+
+        embed = _giveaway_embed_payload(
+            giveaway_id=giveaway_id,
+            prize=prize,
+            end_time=end_dt,
+            winner_count=winner_count,
+            host_id=host_id,
+        )
+        components = [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": 3,
+                        "label": "🎉 Enter",
+                        "custom_id": f"giveaway:enter:{giveaway_id}",
+                    }
+                ],
+            }
+        ]
+        msg = await _discord_post_message(channel_id, embed, components)
+        if msg:
+            try:
+                await db_execute(
+                    "UPDATE giveaways SET message_id = ? WHERE id = ?",
+                    (int(msg["id"]), giveaway_id),
+                )
+            except Exception as exc:
+                logger.warning("Failed to store message_id for giveaway %s: %s", giveaway_id, exc)
+            request.session["flash_ok"] = f"Giveaway #{giveaway_id} launched in Discord!"
+        else:
+            request.session["flash_error"] = (
+                f"Giveaway #{giveaway_id} saved but could not post to Discord "
+                f"(check DISCORD_BOT_TOKEN and bot access to channel {channel_id})."
+            )
 
         return RedirectResponse(f"/giveaways?guild_id={guild_id}&status=active", status_code=302)
 
