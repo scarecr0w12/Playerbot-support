@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import re
@@ -26,13 +27,15 @@ from dashboard.helpers import (
 
 router = APIRouter()
 
+logger = logging.getLogger(__name__)
+
 _DISCORD_API = "https://discord.com/api/v10"
 _BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 
 _DURATION_RE = re.compile(
-    r"(?:(\d+)\s*d(?:ays?)?)?"
-    r"(?:(\d+)\s*h(?:ours?)?)?"
-    r"(?:(\d+)\s*m(?:in(?:utes?)?)?)?"
+    r"(?:(\d+)\s*d(?:ays?)?)?\s*"
+    r"(?:(\d+)\s*h(?:ours?)?)?\s*"
+    r"(?:(\d+)\s*m(?:in(?:utes?)?)?)?\s*"
     r"(?:(\d+)\s*s(?:ec(?:onds?)?)?)?",
     re.IGNORECASE,
 )
@@ -271,12 +274,16 @@ def init(templates: Jinja2Templates) -> APIRouter:
                 )
                 entry_counts[g["id"]] = row["c"] if row else 0
 
+        flash_error = request.session.pop("flash_error", None)
+        flash_ok = request.session.pop("flash_ok", None)
         return templates.TemplateResponse(request, "giveaways.html", ctx({
             "guilds": guilds,
             "guild_id": guild_id,
             "status": status,
             "giveaways": giveaways,
             "entry_counts": entry_counts,
+            "flash_error": flash_error,
+            "flash_ok": flash_ok,
             "active_page": "giveaways",
         }))
 
@@ -295,22 +302,28 @@ def init(templates: Jinja2Templates) -> APIRouter:
 
         td = _parse_duration(duration)
         if td is None:
-            return RedirectResponse(f"/giveaways?guild_id={guild_id}&error=invalid_duration", status_code=302)
+            request.session["flash_error"] = f"Invalid duration '{duration}'. Use formats like: 1d, 2h30m, 45m, 1d12h."
+            return RedirectResponse(f"/giveaways?guild_id={guild_id}&status=active", status_code=302)
 
         winner_count = max(1, min(winner_count, 20))
         end_dt = datetime.now(timezone.utc) + td
         user = request.session.get("user", {})
         host_id = int(user.get("id", 0))
 
-        async with aiosqlite.connect(DB_PATH) as _db:
-            _db.row_factory = aiosqlite.Row
-            cur = await _db.execute(
-                "INSERT INTO giveaways (guild_id, channel_id, prize, end_time, winner_count, host_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (guild_id, channel_id, prize, end_dt.isoformat(), winner_count, host_id),
-            )
-            await _db.commit()
-            giveaway_id = cur.lastrowid
+        try:
+            async with aiosqlite.connect(DB_PATH) as _db:
+                _db.row_factory = aiosqlite.Row
+                cur = await _db.execute(
+                    "INSERT INTO giveaways (guild_id, channel_id, prize, end_time, winner_count, host_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (guild_id, channel_id, prize, end_dt.isoformat(), winner_count, host_id),
+                )
+                await _db.commit()
+                giveaway_id = cur.lastrowid
+        except Exception as exc:
+            logger.exception("Failed to insert giveaway: %s", exc)
+            request.session["flash_error"] = f"Database error: {exc}"
+            return RedirectResponse(f"/giveaways?guild_id={guild_id}&status=active", status_code=302)
 
         embed = _giveaway_embed_payload(
             giveaway_id=giveaway_id,
@@ -337,6 +350,12 @@ def init(templates: Jinja2Templates) -> APIRouter:
             await db_execute(
                 "UPDATE giveaways SET message_id = ? WHERE id = ?",
                 (int(msg["id"]), giveaway_id),
+            )
+            request.session["flash_ok"] = f"Giveaway #{giveaway_id} launched in Discord!"
+        else:
+            request.session["flash_error"] = (
+                f"Giveaway #{giveaway_id} saved to DB but could not post to Discord "
+                f"(check DISCORD_BOT_TOKEN and that the bot has access to channel {channel_id})."
             )
 
         return RedirectResponse(f"/giveaways?guild_id={guild_id}&status=active", status_code=302)
