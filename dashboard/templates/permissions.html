@@ -5,59 +5,77 @@
 {% block head_extra %}
 <style>
   /* Toggle switch */
-  .perm-switch { position: relative; display: inline-flex; align-items: center; cursor: pointer; user-select: none; }
-  .perm-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .perm-switch { position:relative; display:inline-flex; align-items:center; cursor:pointer; user-select:none; flex-shrink:0; }
+  .perm-switch input { position:absolute; opacity:0; width:0; height:0; }
   .perm-track {
-    width: 2.6rem; height: 1.4rem; border-radius: 999px;
-    background: rgba(220,38,38,0.30); border: 1px solid rgba(220,38,38,0.45);
-    transition: background 0.2s, border-color 0.2s;
-    flex-shrink: 0;
+    width:2.6rem; height:1.4rem; border-radius:999px;
+    background:rgba(220,38,38,0.30); border:1px solid rgba(220,38,38,0.45);
+    transition:background .2s,border-color .2s; flex-shrink:0;
   }
-  .perm-switch input:checked ~ .perm-track {
-    background: rgba(22,163,74,0.35); border-color: rgba(34,197,94,0.5);
-  }
+  .perm-switch input:checked ~ .perm-track { background:rgba(22,163,74,0.35); border-color:rgba(34,197,94,0.5); }
   .perm-thumb {
-    position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
-    width: 1rem; height: 1rem; border-radius: 50%;
-    background: #f87171;
-    transition: left 0.18s cubic-bezier(.4,0,.2,1), background 0.18s;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    position:absolute; left:3px; top:50%; transform:translateY(-50%);
+    width:1rem; height:1rem; border-radius:50%; background:#f87171;
+    transition:left .18s cubic-bezier(.4,0,.2,1),background .18s;
+    box-shadow:0 1px 4px rgba(0,0,0,0.4);
   }
-  .perm-switch input:checked ~ .perm-track .perm-thumb {
-    left: calc(2.6rem - 1rem - 3px);
-    background: #4ade80;
+  .perm-switch input:checked ~ .perm-track .perm-thumb { left:calc(2.6rem - 1rem - 3px); background:#4ade80; }
+  .perm-switch.saving .perm-track { opacity:.5; pointer-events:none; }
+  .allow-label { font-size:.72rem; font-weight:600; min-width:2.4rem; }
+  .allow-allow { color:#4ade80; }
+  .allow-deny  { color:#f87171; }
+
+  /* Category section */
+  .cat-heading {
+    display:flex; align-items:center; gap:.5rem;
+    padding:.4rem .75rem; cursor:pointer; user-select:none;
+    border-radius:.5rem; transition:background .12s;
   }
-  .perm-switch.saving .perm-track { opacity: 0.5; pointer-events: none; }
+  .cat-heading:hover { background:rgba(255,255,255,0.04); }
+  .cat-label { font-size:.7rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#4a6080; }
+  .cat-chevron { font-size:.6rem; color:#3d5272; transition:transform .2s; }
 
-  /* Command card */
-  .cmd-card { border: 1px solid rgba(148,163,184,0.10); border-radius: 0.75rem; background: rgba(8,15,28,0.45); overflow: hidden; }
-  .cmd-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; cursor: pointer; user-select: none; transition: background 0.12s; }
-  .cmd-header:hover { background: rgba(25,38,58,0.5); }
-  .cmd-body { padding: 0; }
-  .override-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; border-top: 1px solid rgba(31,41,55,0.7); }
-  .override-row:hover { background: rgba(25,38,58,0.4); }
-  .type-badge {
-    display: inline-flex; align-items: center; gap: 0.3rem;
-    padding: 0.15rem 0.5rem; border-radius: 0.3rem; font-size: 0.7rem; font-weight: 600;
+  /* Command row */
+  .cmd-row {
+    display:grid; grid-template-columns:1fr auto; align-items:start;
+    gap:.75rem; padding:.7rem 1rem;
+    border-bottom:1px solid rgba(31,41,55,0.6);
+    transition:background .1s;
   }
-  .type-role    { background: rgba(88,101,242,0.18); color: #a5b4fc; border: 1px solid rgba(88,101,242,0.3); }
-  .type-channel { background: rgba(31,183,166,0.15); color: #5eead4; border: 1px solid rgba(31,183,166,0.28); }
-  .type-user    { background: rgba(245,158,11,0.13); color: #fcd34d; border: 1px solid rgba(245,158,11,0.25); }
-  .allow-label { font-size: 0.72rem; font-weight: 600; min-width: 2.2rem; text-align: center; }
-  .allow-allow { color: #4ade80; }
-  .allow-deny  { color: #f87171; }
+  .cmd-row:last-child { border-bottom:none; }
+  .cmd-row:hover { background:rgba(25,38,58,0.35); }
+  .cmd-name { font-size:.82rem; font-weight:600; color:#c0d4f8; font-family:monospace; }
+  .cmd-desc { font-size:.73rem; color:#4d6485; margin-top:.1rem; }
 
-  /* Add override panel */
-  .add-panel { border: 1px dashed rgba(79,124,255,0.22); border-radius: 0.65rem; padding: 0.9rem 1rem; background: rgba(10,18,32,0.45); }
+  /* Override chips inside a command row */
+  .overrides-area { display:flex; flex-direction:column; gap:.4rem; min-width:0; }
+  .override-chip {
+    display:flex; align-items:center; gap:.5rem;
+    background:rgba(15,23,42,0.6); border:1px solid rgba(31,41,55,0.9);
+    border-radius:.45rem; padding:.3rem .6rem; font-size:.75rem;
+  }
+  .chip-role  { border-color:rgba(88,101,242,0.25); }
+  .chip-channel { border-color:rgba(31,183,166,0.22); }
+  .chip-user  { border-color:rgba(245,158,11,0.22); }
+  .chip-name { color:#94a3b8; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-  /* Inline add form hidden by default */
-  .cmd-add-form { display: none; }
-  .cmd-add-form.open { display: block; }
+  /* Add-role form per command */
+  .add-role-form {
+    display:none; margin-top:.4rem;
+    background:rgba(10,18,32,0.7); border:1px dashed rgba(79,124,255,0.2);
+    border-radius:.5rem; padding:.6rem .75rem;
+  }
+  .add-role-form.open { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+
+  /* Role select dropdown */
+  .role-select { flex:1; min-width:140px; }
+  select.input option { background:#1a2a42; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="flex flex-col xl:flex-row gap-6">
+
   <!-- Guild list -->
   <div class="w-full xl:w-64 flex-shrink-0">
     <div class="card p-4">
@@ -78,189 +96,227 @@
   </div>
 
   <!-- Main content -->
-  <div class="flex-1 min-w-0 space-y-5">
+  <div class="flex-1 min-w-0 space-y-4">
     {% if not guild_id %}
     <div class="card p-14 text-center">
       <i class="fa fa-shield-halved text-5xl text-gray-700 mb-4" style="display:block;"></i>
-      <p class="text-gray-400">Select a guild to manage per-command allow/deny overrides.</p>
+      <p class="text-gray-400">Select a guild to manage per-command role permissions.</p>
     </div>
+
     {% else %}
 
-    <!-- Header + add button -->
+    <!-- Page header -->
     <div class="flex items-center justify-between gap-3 flex-wrap">
       <div>
-        <h2 class="text-lg font-semibold text-white">Command Overrides</h2>
-        <p class="text-sm text-gray-500 mt-0.5">Toggle switches to allow or deny commands per role, channel, or user.</p>
+        <h2 class="text-lg font-semibold text-white">Command Permissions</h2>
+        <p class="text-sm text-gray-500 mt-0.5">For each command, choose which roles are allowed or denied. Defaults apply when no override is set.</p>
       </div>
-      <div class="flex items-center gap-2">
-        <span class="text-xs text-gray-500 px-2 py-1 rounded bg-gray-800/60">{{ permission_rows|length }} override{% if permission_rows|length != 1 %}s{% endif %}</span>
-        <button id="btn-add-override" class="btn-primary text-sm" onclick="document.getElementById('add-override-panel').classList.toggle('hidden')">
-          <i class="fa fa-plus"></i> Add override
-        </button>
-      </div>
+      <span id="roles-status" class="text-xs text-gray-600 hidden"><i class="fa fa-spinner fa-spin mr-1"></i> Loading roles…</span>
     </div>
 
-    <!-- Add override panel -->
-    <div id="add-override-panel" class="card p-5 hidden">
-      <h3 class="font-semibold text-white mb-4">New override</h3>
-      <form method="post" action="/permissions/save" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-end">
-        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-        <div class="field-stack">
-          <label class="text-xs text-gray-400">Command</label>
-          <input class="input" type="text" name="command" placeholder="e.g. warn" required autocomplete="off"/>
-        </div>
-        <div class="field-stack">
-          <label class="text-xs text-gray-400">Target type</label>
-          <select class="input" name="target_type">
-            <option value="role">Role</option>
-            <option value="channel">Channel</option>
-            <option value="user">User</option>
-          </select>
-        </div>
-        <div class="field-stack">
-          <label class="text-xs text-gray-400">Target ID</label>
-          <input class="input" type="number" name="target_id" placeholder="Discord snowflake ID" required/>
-        </div>
-        <div class="field-stack">
-          <label class="text-xs text-gray-400 mb-2 block">Decision</label>
-          <div class="flex items-center gap-3">
-            <label class="perm-switch" title="Toggle Allow / Deny">
-              <input type="checkbox" id="new-allowed-cb">
-              <span class="perm-track"><span class="perm-thumb"></span></span>
-            </label>
-            <span id="new-allowed-label" class="text-sm font-semibold allow-deny">Deny</span>
-            <input type="hidden" name="allowed" value="0" id="new-allowed-hidden"/>
-          </div>
-        </div>
-        <div class="sm:col-span-2 xl:col-span-4 flex justify-end gap-2 pt-1">
-          <button type="button" class="btn-secondary text-sm" onclick="document.getElementById('add-override-panel').classList.add('hidden')">Cancel</button>
-          <button class="btn-primary text-sm" type="submit"><i class="fa fa-save"></i> Save override</button>
-        </div>
-      </form>
-    </div>
+    <!-- Command catalogue -->
+    {% set ns = namespace(current_group='') %}
+    <div class="card overflow-hidden">
+      {% for cmd in command_catalogue %}
+      {% if cmd.group != ns.current_group %}
+      {% if ns.current_group != '' %}</div>{% endif %}
+      {% set ns.current_group = cmd.group %}
+      <!-- Category header -->
+      <div class="px-4 py-2.5 flex items-center gap-2 border-b border-[rgba(31,41,55,0.7)] bg-[rgba(10,18,32,0.5)] cursor-pointer select-none" onclick="toggleCat(this)" data-cat="{{ cmd.group | replace(' ', '-') }}">
+        <i class="fa fa-chevron-down cat-chevron"></i>
+        <span class="cat-label">{{ cmd.group }}</span>
+        <span class="text-[0.65rem] text-gray-700 ml-auto">
+          {{ command_catalogue | selectattr('group', 'equalto', cmd.group) | list | length }} commands
+        </span>
+      </div>
+      <div class="cat-body" data-cat-body="{{ cmd.group | replace(' ', '-') }}">
+      {% endif %}
 
-    <!-- Overrides grouped by command -->
-    {% if permission_rows %}
-    {% set seen = namespace(commands=[]) %}
-    <div class="space-y-3" id="overrides-list">
-      {% for row in permission_rows %}
-      {% if row.command not in seen.commands %}
-      {% set _ = seen.commands.append(row.command) %}
-      <div class="cmd-card" id="cmd-{{ row.command | replace(' ', '-') }}">
-        <!-- Command header -->
-        <div class="cmd-header" onclick="toggleCmd(this)">
-          <span class="text-xs font-mono font-semibold text-[#8aabff] bg-[#4f7cff]/10 border border-[#4f7cff]/20 px-2 py-0.5 rounded">/{{ row.command }}</span>
-          <span class="text-xs text-gray-500 ml-auto mr-2">
-            {{ permission_rows | selectattr('command', 'equalto', row.command) | list | length }}
-            override{% if (permission_rows | selectattr('command', 'equalto', row.command) | list | length) != 1 %}s{% endif %}
-          </span>
-          <i class="fa fa-chevron-down text-gray-500 text-xs transition-transform duration-200 cmd-chevron"></i>
-        </div>
-        <!-- Overrides for this command -->
-        <div class="cmd-body">
-          {% for r in permission_rows %}{% if r.command == row.command %}
-          <div class="override-row" id="row-{{ r.id }}">
-            <!-- Type badge -->
-            <span class="type-badge type-{{ r.target_type }}">
-              <i class="fa {% if r.target_type == 'role' %}fa-at{% elif r.target_type == 'channel' %}fa-hashtag{% else %}fa-user{% endif %}"></i>
-              {{ r.target_type }}
-            </span>
-            <!-- Target ID -->
-            <span class="font-mono text-xs text-gray-400 flex-1 truncate" title="{{ r.target_id }}">{{ r.target_id }}</span>
-            <!-- Allow/Deny toggle switch -->
-            <div class="flex items-center gap-2">
-              <span class="allow-label {% if r.allowed %}allow-allow{% else %}allow-deny{% endif %}" id="lbl-{{ r.id }}">
-                {{ 'Allow' if r.allowed else 'Deny' }}
-              </span>
-              <label class="perm-switch" title="Toggle Allow / Deny" id="sw-{{ r.id }}">
+      {# Collect overrides for this specific command #}
+      {% set cmd_overrides = permission_rows | selectattr('command', 'equalto', cmd.name) | list %}
+      <div class="cmd-row">
+        <!-- Left: command name + description -->
+        <div>
+          <div class="cmd-name">/{{ cmd.name }}</div>
+          <div class="cmd-desc">{{ cmd.description }}</div>
+          <!-- Existing overrides -->
+          {% if cmd_overrides %}
+          <div class="overrides-area mt-2">
+            {% for r in cmd_overrides %}
+            <div class="override-chip chip-{{ r.target_type }}" id="chip-{{ r.id }}">
+              <i class="fa {% if r.target_type == 'role' %}fa-at text-[#a5b4fc]{% elif r.target_type == 'channel' %}fa-hashtag text-[#5eead4]{% else %}fa-user text-[#fcd34d]{% endif %} text-xs"></i>
+              <span class="chip-name" id="chipname-{{ r.id }}" data-id="{{ r.target_id }}">{{ r.target_id }}</span>
+              <span class="allow-label {% if r.allowed %}allow-allow{% else %}allow-deny{% endif %}" id="lbl-{{ r.id }}">{{ 'Allow' if r.allowed else 'Deny' }}</span>
+              <label class="perm-switch" id="sw-{{ r.id }}" title="Toggle allow/deny">
                 <input type="checkbox" {% if r.allowed %}checked{% endif %}
-                       onchange="togglePerm({{ r.id }}, {{ guild_id }}, this)">
+                       data-id="{{ r.id }}" data-guild="{{ guild_id }}"
+                       onchange="togglePerm(this)">
                 <span class="perm-track"><span class="perm-thumb"></span></span>
               </label>
+              <form method="post" action="/permissions/delete" onsubmit="return confirm('Remove this override?')" style="margin:0;">
+                <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                <input type="hidden" name="permission_id" value="{{ r.id }}"/>
+                <button type="submit" class="text-gray-600 hover:text-red-400 transition-colors ml-1" title="Delete">
+                  <i class="fa fa-xmark text-xs"></i>
+                </button>
+              </form>
             </div>
-            <!-- Delete -->
-            <form method="post" action="/permissions/delete" onsubmit="return confirm('Delete this override?')" style="margin:0;">
-              <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
-              <input type="hidden" name="permission_id" value="{{ r.id }}"/>
-              <button type="submit" class="btn-danger" title="Delete override" style="padding:0.25rem 0.55rem;">
-                <i class="fa fa-trash text-xs"></i>
-              </button>
-            </form>
+            {% endfor %}
           </div>
-          {% endif %}{% endfor %}
+          {% endif %}
+          <!-- Inline add-role form -->
+          <div class="add-role-form" id="arf-{{ cmd.name | replace(' ', '_') }}">
+            <select class="input role-select text-sm" id="role-sel-{{ cmd.name | replace(' ', '_') }}">
+              <option value="">— select role —</option>
+            </select>
+            <label class="perm-switch mx-1" id="arf-sw-{{ cmd.name | replace(' ', '_') }}" title="Allow / Deny">
+              <input type="checkbox" id="arf-cb-{{ cmd.name | replace(' ', '_') }}">
+              <span class="perm-track"><span class="perm-thumb"></span></span>
+            </label>
+            <span class="allow-label allow-deny text-xs" id="arf-lbl-{{ cmd.name | replace(' ', '_') }}">Deny</span>
+            <button class="btn-success text-xs" style="padding:.28rem .65rem;"
+                    onclick="saveRoleOverride('{{ cmd.name }}', '{{ cmd.name | replace(' ', '_') }}', {{ guild_id }})">
+              <i class="fa fa-check"></i> Add
+            </button>
+            <button class="btn-secondary text-xs" style="padding:.28rem .65rem;"
+                    onclick="closeArf('{{ cmd.name | replace(' ', '_') }}')">
+              Cancel
+            </button>
+          </div>
         </div>
+        <!-- Right: Add role button -->
+        <button class="btn-secondary text-xs flex-shrink-0 mt-1"
+                onclick="openArf('{{ cmd.name | replace(' ', '_') }}')">
+          <i class="fa fa-plus text-[0.65rem]"></i> Role
+        </button>
       </div>
-      {% endif %}
+
       {% endfor %}
+      {% if ns.current_group != '' %}</div>{% endif %}
     </div>
-    {% else %}
-    <div class="card p-14 text-center">
-      <i class="fa fa-shield-halved text-4xl text-gray-700 mb-3" style="display:block;"></i>
-      <p class="text-gray-500 mb-4">No overrides configured for this guild.</p>
-      <button class="btn-primary" onclick="document.getElementById('add-override-panel').classList.remove('hidden'); document.getElementById('btn-add-override').scrollIntoView({behavior:'smooth'})">
-        <i class="fa fa-plus"></i> Add your first override
-      </button>
-    </div>
-    {% endif %}
 
     {% endif %}
   </div>
 </div>
 
 <script>
-  /* ── New override: sync hidden field + label with checkbox ── */
-  const newCb = document.getElementById('new-allowed-cb');
-  const newHidden = document.getElementById('new-allowed-hidden');
-  const newLabel = document.getElementById('new-allowed-label');
-  if (newCb) {
-    newCb.addEventListener('change', function () {
-      if (this.checked) {
-        newHidden.value = '1';
-        newLabel.textContent = 'Allow';
-        newLabel.className = 'text-sm font-semibold allow-allow';
-      } else {
-        newHidden.value = '0';
-        newLabel.textContent = 'Deny';
-        newLabel.className = 'text-sm font-semibold allow-deny';
-      }
+const GUILD_ID = {{ guild_id | tojson }};
+
+/* ── Load guild roles from API and populate all role selects ── */
+let rolesCache = null;
+async function loadRoles() {
+  if (!GUILD_ID) return;
+  if (rolesCache) return rolesCache;
+  document.getElementById('roles-status').classList.remove('hidden');
+  try {
+    const res = await fetch(`/api/guild-roles/${GUILD_ID}`);
+    const data = await res.json();
+    rolesCache = data.roles || [];
+    /* Populate all selects */
+    document.querySelectorAll('.role-select').forEach(sel => {
+      const current = sel.value;
+      rolesCache.forEach(role => {
+        if (!sel.querySelector(`option[value="${role.id}"]`)) {
+          const opt = document.createElement('option');
+          opt.value = role.id;
+          opt.textContent = role.name;
+          if (role.color) opt.style.color = '#' + role.color.toString(16).padStart(6, '0');
+          sel.appendChild(opt);
+        }
+      });
+      if (current) sel.value = current;
     });
-  }
+    /* Resolve existing chip IDs to names */
+    document.querySelectorAll('.chip-name[data-id]').forEach(el => {
+      const match = rolesCache.find(r => r.id === el.dataset.id);
+      if (match) el.textContent = match.name;
+    });
+  } catch(e) {}
+  document.getElementById('roles-status').classList.add('hidden');
+  return rolesCache;
+}
 
-  /* ── Toggle an existing override via AJAX ── */
-  async function togglePerm(id, guildId, checkbox) {
-    const sw = document.getElementById('sw-' + id);
-    const lbl = document.getElementById('lbl-' + id);
-    const allowed = checkbox.checked ? 1 : 0;
-    sw.classList.add('saving');
+/* ── Open / close add-role form ── */
+function openArf(key) {
+  document.querySelectorAll('.add-role-form.open').forEach(f => f.classList.remove('open'));
+  const form = document.getElementById('arf-' + key);
+  if (form) { form.classList.add('open'); loadRoles(); }
+}
+function closeArf(key) {
+  const form = document.getElementById('arf-' + key);
+  if (form) form.classList.remove('open');
+}
 
-    try {
-      const body = new URLSearchParams({ guild_id: guildId, permission_id: id, allowed });
-      const res = await fetch('/permissions/toggle', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-      const data = await res.json();
-      if (!data.ok) throw new Error('Server error');
-      if (data.allowed) {
-        lbl.textContent = 'Allow';
-        lbl.className = 'allow-label allow-allow';
-      } else {
-        lbl.textContent = 'Deny';
-        lbl.className = 'allow-label allow-deny';
-      }
-      showToast(data.allowed ? 'Override set to Allow' : 'Override set to Deny', 'success');
-    } catch (e) {
-      checkbox.checked = !checkbox.checked;
-      showToast('Failed to update override', 'error');
-    } finally {
-      sw.classList.remove('saving');
+/* ── Sync allow/deny label in inline add form ── */
+document.querySelectorAll('.add-role-form').forEach(form => {
+  const key = form.id.replace('arf-', '');
+  const cb  = document.getElementById('arf-cb-' + key);
+  const lbl = document.getElementById('arf-lbl-' + key);
+  if (!cb) return;
+  cb.addEventListener('change', function() {
+    lbl.textContent = this.checked ? 'Allow' : 'Deny';
+    lbl.className = 'allow-label text-xs ' + (this.checked ? 'allow-allow' : 'allow-deny');
+  });
+});
+
+/* ── Save a new role override via form POST (no page reload needed — we reload) ── */
+async function saveRoleOverride(cmdName, key, guildId) {
+  const sel = document.getElementById('role-sel-' + key);
+  const cb  = document.getElementById('arf-cb-'  + key);
+  const roleId = sel && sel.value;
+  if (!roleId) { showToast('Select a role first', 'warning'); return; }
+  const allowed = cb && cb.checked ? 1 : 0;
+  const body = new URLSearchParams({
+    guild_id: guildId, command: cmdName,
+    target_type: 'role', target_id: roleId, allowed,
+  });
+  try {
+    const res = await fetch('/permissions/save', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    if (res.redirected || res.ok) {
+      showToast(`Override saved for /${cmdName}`, 'success');
+      setTimeout(() => location.reload(), 600);
     }
+  } catch(e) {
+    showToast('Failed to save override', 'error');
   }
+}
 
-  /* ── Collapse/expand command card ── */
-  function toggleCmd(header) {
-    const body = header.nextElementSibling;
-    const chevron = header.querySelector('.cmd-chevron');
-    const isOpen = body.style.display !== 'none';
-    body.style.display = isOpen ? 'none' : '';
-    chevron.style.transform = isOpen ? 'rotate(-90deg)' : '';
+/* ── Toggle an existing override allow/deny ── */
+async function togglePerm(checkbox) {
+  const id      = checkbox.dataset.id;
+  const guildId = checkbox.dataset.guild;
+  const allowed = checkbox.checked ? 1 : 0;
+  const sw  = document.getElementById('sw-' + id);
+  const lbl = document.getElementById('lbl-' + id);
+  sw.classList.add('saving');
+  try {
+    const body = new URLSearchParams({ guild_id: guildId, permission_id: id, allowed });
+    const res  = await fetch('/permissions/toggle', { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+    const data = await res.json();
+    if (!data.ok) throw new Error();
+    lbl.textContent = data.allowed ? 'Allow' : 'Deny';
+    lbl.className = 'allow-label ' + (data.allowed ? 'allow-allow' : 'allow-deny');
+    showToast(data.allowed ? 'Set to Allow' : 'Set to Deny', 'success');
+  } catch(e) {
+    checkbox.checked = !checkbox.checked;
+    showToast('Failed to update', 'error');
+  } finally {
+    sw.classList.remove('saving');
   }
+}
+
+/* ── Collapse/expand category ── */
+function toggleCat(header) {
+  const key  = header.dataset.cat;
+  const body = document.querySelector(`[data-cat-body="${key}"]`);
+  const chev = header.querySelector('.cat-chevron');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  chev.style.transform = open ? 'rotate(-90deg)' : '';
+}
+
+/* Load roles on page load so chips resolve immediately */
+if (GUILD_ID) loadRoles();
 </script>
 {% endblock %}
