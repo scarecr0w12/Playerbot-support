@@ -205,7 +205,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     @mod_group.command(name="mute", description="Timeout a member")
     @app_commands.describe(
         member="The member to timeout",
-        duration="Timeout duration (e.g., 10m, 1h, 1d)",
+        duration_minutes="Timeout duration in minutes",
         reason="Reason for the timeout"
     )
     @app_commands.checks.has_permissions(moderate_members=True)
