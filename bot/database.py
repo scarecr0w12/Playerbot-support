@@ -208,6 +208,132 @@ CREATE TABLE IF NOT EXISTS selfroles (
     PRIMARY KEY (guild_id, role_id)
 );
 
+-- Reaction roles (emoji-based role assignment)
+CREATE TABLE IF NOT EXISTS reaction_roles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id    INTEGER NOT NULL,
+    message_id  INTEGER NOT NULL,
+    channel_id  INTEGER NOT NULL,
+    emoji       TEXT    NOT NULL,
+    role_id     INTEGER NOT NULL,
+    unique_role INTEGER NOT NULL DEFAULT 0,  -- 1 = remove other roles from this message when adding
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(guild_id, message_id, emoji)
+);
+CREATE INDEX IF NOT EXISTS idx_reaction_msg ON reaction_roles (message_id);
+
+-- Polls system
+CREATE TABLE IF NOT EXISTS polls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        INTEGER NOT NULL,
+    channel_id      INTEGER NOT NULL,
+    message_id      INTEGER UNIQUE,
+    creator_id      INTEGER NOT NULL,
+    question        TEXT    NOT NULL,
+    options         TEXT    NOT NULL,    -- JSON array of options
+    multiple_choice INTEGER NOT NULL DEFAULT 0,  -- 0 = single choice, 1 = multiple choice
+    anonymous       INTEGER NOT NULL DEFAULT 0,  -- 0 = public votes, 1 = anonymous
+    ends_at         TEXT,                  -- NULL = no end time
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_polls_guild ON polls (guild_id);
+
+-- Poll votes
+CREATE TABLE IF NOT EXISTS poll_votes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    poll_id     INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    option_index INTEGER NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(poll_id, user_id, option_index)
+);
+CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes (poll_id, user_id);
+
+-- Raid protection system
+CREATE TABLE IF NOT EXISTS raid_settings (
+    guild_id        INTEGER PRIMARY KEY,
+    enabled         INTEGER NOT NULL DEFAULT 0,
+    join_threshold  INTEGER NOT NULL DEFAULT 5,      -- Number of joins in window to trigger
+    join_window     INTEGER NOT NULL DEFAULT 60,     -- Time window in seconds
+    account_age_min INTEGER NOT NULL DEFAULT 0,      -- Minimum account age in hours (0 = disabled)
+    lockdown_duration INTEGER NOT NULL DEFAULT 300,  -- Lockdown duration in seconds
+    alert_channel_id INTEGER,                        -- Channel to send raid alerts to
+    auto_ban        INTEGER NOT NULL DEFAULT 0,      -- Auto-ban raiders (1 = yes)
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Raid events log
+CREATE TABLE IF NOT EXISTS raid_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        INTEGER NOT NULL,
+    triggered_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    join_count      INTEGER NOT NULL,
+    window_seconds  INTEGER NOT NULL,
+    actions_taken   TEXT,                           -- JSON array of actions taken
+    resolved_at     TEXT,
+    resolved_by     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_raid_events_guild ON raid_events (guild_id, triggered_at DESC);
+
+-- Join tracking for raid detection
+CREATE TABLE IF NOT EXISTS join_tracking (
+    guild_id        INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL,
+    joined_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    account_created TEXT,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_join_tracking_guild_time ON join_tracking (guild_id, joined_at DESC);
+
+-- Invite tracking system
+CREATE TABLE IF NOT EXISTS invite_codes (
+    guild_id        INTEGER NOT NULL,
+    invite_code     TEXT    NOT NULL,
+    inviter_id      INTEGER NOT NULL,
+    channel_id      INTEGER,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    uses            INTEGER NOT NULL DEFAULT 0,
+    max_uses        INTEGER,                -- NULL = unlimited
+    temporary       INTEGER NOT NULL DEFAULT 0,  -- 1 = temporary invite
+    expires_at      TEXT,                   -- NULL = never expires
+    UNIQUE(guild_id, invite_code)
+);
+CREATE INDEX IF NOT EXISTS idx_invite_codes_guild ON invite_codes (guild_id, inviter_id);
+
+-- Invite uses tracking
+CREATE TABLE IF NOT EXISTS invite_uses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id        INTEGER NOT NULL,
+    invite_code     TEXT    NOT NULL,
+    user_id         INTEGER NOT NULL,
+    inviter_id      INTEGER NOT NULL,
+    used_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+    left_at         TEXT,                   -- When user left (if tracked)
+    account_created TEXT,                   -- User's account creation time
+    UNIQUE(guild_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_invite_uses_guild ON invite_uses (guild_id, invite_code, used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_invite_uses_inviter ON invite_uses (guild_id, inviter_id, used_at DESC);
+
+-- Birthday tracking system
+CREATE TABLE IF NOT EXISTS birthdays (
+    guild_id    INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    birthday    TEXT    NOT NULL,  -- Format: MM-DD
+    timezone    TEXT    DEFAULT 'UTC',
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_birthdays_guild ON birthdays (guild_id, birthday);
+
+-- Birthday announcements sent (to prevent duplicate announcements in a day)
+CREATE TABLE IF NOT EXISTS birthday_announcements (
+    guild_id    INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    date_sent   TEXT    NOT NULL,  -- Format: YYYY-MM-DD
+    PRIMARY KEY (guild_id, user_id, date_sent)
+);
+
 -- Command permission overrides (per-guild)
 CREATE TABLE IF NOT EXISTS command_permissions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2173,3 +2299,525 @@ class Database:
         )
         await self.conn.commit()
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Reaction roles
+    # ------------------------------------------------------------------
+
+    async def add_reaction_role(
+        self,
+        guild_id: int,
+        message_id: int,
+        channel_id: int,
+        emoji: str,
+        role_id: int,
+        unique_role: bool = False,
+    ) -> bool:
+        """Add a reaction role mapping. Returns False if emoji already exists for this message."""
+        try:
+            await self.conn.execute(
+                "INSERT INTO reaction_roles (guild_id, message_id, channel_id, emoji, role_id, unique_role) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (guild_id, message_id, channel_id, emoji, role_id, int(unique_role)),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def remove_reaction_role(self, guild_id: int, message_id: int, emoji: str) -> bool:
+        """Remove a specific reaction role mapping."""
+        cur = await self.conn.execute(
+            "DELETE FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?",
+            (guild_id, message_id, emoji),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def remove_all_reaction_roles(self, guild_id: int, message_id: int) -> int:
+        """Remove all reaction roles for a message. Returns number removed."""
+        cur = await self.conn.execute(
+            "DELETE FROM reaction_roles WHERE guild_id = ? AND message_id = ?",
+            (guild_id, message_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    async def get_reaction_roles(self, guild_id: int, message_id: int = None):
+        """Get reaction roles for a guild or specific message."""
+        if message_id:
+            cur = await self.conn.execute(
+                "SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ? ORDER BY emoji",
+                (guild_id, message_id),
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT * FROM reaction_roles WHERE guild_id = ? ORDER BY created_at DESC",
+                (guild_id,),
+            )
+        return await cur.fetchall()
+
+    async def get_reaction_role(self, guild_id: int, message_id: int, emoji: str):
+        """Get a specific reaction role mapping."""
+        cur = await self.conn.execute(
+            "SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?",
+            (guild_id, message_id, emoji),
+        )
+        return await cur.fetchone()
+
+    # ------------------------------------------------------------------
+    # Polls
+    # ------------------------------------------------------------------
+
+    async def create_poll(
+        self,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        creator_id: int,
+        question: str,
+        options: list[str],
+        multiple_choice: bool = False,
+        anonymous: bool = False,
+        ends_at: str | None = None,
+    ) -> bool:
+        """Create a new poll."""
+        import json
+        try:
+            await self.conn.execute(
+                "INSERT INTO polls (guild_id, channel_id, message_id, creator_id, question, options, multiple_choice, anonymous, ends_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (guild_id, channel_id, message_id, creator_id, question, json.dumps(options), int(multiple_choice), int(anonymous), ends_at),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def get_poll(self, guild_id: int, message_id: int):
+        """Get a poll by message ID."""
+        cur = await self.conn.execute(
+            "SELECT * FROM polls WHERE guild_id = ? AND message_id = ?",
+            (guild_id, message_id),
+        )
+        return await cur.fetchone()
+
+    async def get_polls(self, guild_id: int, active_only: bool = False):
+        """Get polls for a guild."""
+        if active_only:
+            cur = await self.conn.execute(
+                "SELECT * FROM polls WHERE guild_id = ? AND (ends_at IS NULL OR ends_at > datetime('now')) ORDER BY created_at DESC",
+                (guild_id,),
+            )
+        else:
+            cur = await self.conn.execute(
+                "SELECT * FROM polls WHERE guild_id = ? ORDER BY created_at DESC",
+                (guild_id,),
+            )
+        return await cur.fetchall()
+
+    async def delete_poll(self, guild_id: int, message_id: int) -> bool:
+        """Delete a poll and its votes."""
+        poll = await self.get_poll(guild_id, message_id)
+        if not poll:
+            return False
+        
+        await self.conn.execute("DELETE FROM poll_votes WHERE poll_id = ?", (poll["id"],))
+        cur = await self.conn.execute("DELETE FROM polls WHERE guild_id = ? AND message_id = ?", (guild_id, message_id))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def add_poll_vote(self, poll_id: int, user_id: int, option_index: int) -> bool:
+        """Add a vote to a poll."""
+        try:
+            await self.conn.execute(
+                "INSERT INTO poll_votes (poll_id, user_id, option_index) VALUES (?, ?, ?)",
+                (poll_id, user_id, option_index),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+    async def remove_poll_vote(self, poll_id: int, user_id: int, option_index: int) -> bool:
+        """Remove a vote from a poll."""
+        cur = await self.conn.execute(
+            "DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ? AND option_index = ?",
+            (poll_id, user_id, option_index),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_user_poll_votes(self, poll_id: int, user_id: int):
+        """Get all votes by a user for a specific poll."""
+        cur = await self.conn.execute(
+            "SELECT option_index FROM poll_votes WHERE poll_id = ? AND user_id = ?",
+            (poll_id, user_id),
+        )
+        rows = await cur.fetchall()
+        return [row["option_index"] for row in rows]
+
+    async def get_poll_results(self, poll_id: int):
+        """Get vote counts for all options in a poll."""
+        cur = await self.conn.execute(
+            "SELECT option_index, COUNT(*) as votes FROM poll_votes WHERE poll_id = ? GROUP BY option_index ORDER BY option_index",
+            (poll_id,),
+        )
+        return await cur.fetchall()
+
+    async def clear_user_poll_votes(self, poll_id: int, user_id: int) -> int:
+        """Clear all votes by a user for a poll (for single-choice polls)."""
+        cur = await self.conn.execute(
+            "DELETE FROM poll_votes WHERE poll_id = ? AND user_id = ?",
+            (poll_id, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Raid Protection
+    # ------------------------------------------------------------------
+
+    async def get_raid_settings(self, guild_id: int):
+        """Get raid protection settings for a guild."""
+        cur = await self.conn.execute(
+            "SELECT * FROM raid_settings WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return await cur.fetchone()
+
+    async def update_raid_settings(
+        self,
+        guild_id: int,
+        *,
+        enabled: bool | None = None,
+        join_threshold: int | None = None,
+        join_window: int | None = None,
+        account_age_min: int | None = None,
+        lockdown_duration: int | None = None,
+        alert_channel_id: int | None = None,
+        auto_ban: bool | None = None,
+    ) -> bool:
+        """Update raid protection settings."""
+        # Check if settings exist
+        existing = await self.get_raid_settings(guild_id)
+        
+        if existing is None:
+            # Create new settings
+            await self.conn.execute(
+                """INSERT INTO raid_settings 
+                (guild_id, enabled, join_threshold, join_window, account_age_min, 
+                 lockdown_duration, alert_channel_id, auto_ban) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    guild_id,
+                    int(enabled if enabled is not None else False),
+                    join_threshold if join_threshold is not None else 5,
+                    join_window if join_window is not None else 60,
+                    account_age_min if account_age_min is not None else 0,
+                    lockdown_duration if lockdown_duration is not None else 300,
+                    alert_channel_id,
+                    int(auto_ban if auto_ban is not None else False),
+                ),
+            )
+        else:
+            # Update existing settings
+            updates = []
+            values = []
+            
+            if enabled is not None:
+                updates.append("enabled = ?")
+                values.append(int(enabled))
+            if join_threshold is not None:
+                updates.append("join_threshold = ?")
+                values.append(join_threshold)
+            if join_window is not None:
+                updates.append("join_window = ?")
+                values.append(join_window)
+            if account_age_min is not None:
+                updates.append("account_age_min = ?")
+                values.append(account_age_min)
+            if lockdown_duration is not None:
+                updates.append("lockdown_duration = ?")
+                values.append(lockdown_duration)
+            if alert_channel_id is not None:
+                updates.append("alert_channel_id = ?")
+                values.append(alert_channel_id)
+            if auto_ban is not None:
+                updates.append("auto_ban = ?")
+                values.append(int(auto_ban))
+            
+            updates.append("updated_at = datetime('now')")
+            values.append(guild_id)
+            
+            await self.conn.execute(
+                f"UPDATE raid_settings SET {', '.join(updates)} WHERE guild_id = ?",
+                values,
+            )
+        
+        await self.conn.commit()
+        return True
+
+    async def track_join(self, guild_id: int, user_id: int, account_created: str | None = None):
+        """Track a user joining for raid detection."""
+        await self.conn.execute(
+            "INSERT OR REPLACE INTO join_tracking (guild_id, user_id, account_created) VALUES (?, ?, ?)",
+            (guild_id, user_id, account_created),
+        )
+        await self.conn.commit()
+
+    async def get_recent_joins(self, guild_id: int, seconds: int):
+        """Get joins in the last N seconds for raid detection."""
+        cur = await self.conn.execute(
+            """SELECT user_id, joined_at, account_created 
+               FROM join_tracking 
+               WHERE guild_id = ? AND joined_at > datetime('now', '-{} seconds') 
+               ORDER BY joined_at DESC""".format(seconds),
+            (guild_id,),
+        )
+        return await cur.fetchall()
+
+    async def cleanup_old_joins(self, guild_id: int, hours: int = 24):
+        """Clean up old join tracking data."""
+        cur = await self.conn.execute(
+            "DELETE FROM join_tracking WHERE guild_id = ? AND joined_at < datetime('now', '-{} hours')".format(hours),
+            (guild_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    async def create_raid_event(
+        self,
+        guild_id: int,
+        join_count: int,
+        window_seconds: int,
+        actions_taken: list[str],
+    ) -> int:
+        """Create a raid event log entry."""
+        import json
+        cur = await self.conn.execute(
+            """INSERT INTO raid_events 
+            (guild_id, join_count, window_seconds, actions_taken) 
+            VALUES (?, ?, ?, ?)""",
+            (guild_id, join_count, window_seconds, json.dumps(actions_taken)),
+        )
+        await self.conn.commit()
+        return cur.lastrowid
+
+    async def get_raid_events(self, guild_id: int, limit: int = 10):
+        """Get recent raid events for a guild."""
+        cur = await self.conn.execute(
+            "SELECT * FROM raid_events WHERE guild_id = ? ORDER BY triggered_at DESC LIMIT ?",
+            (guild_id, limit),
+        )
+        return await cur.fetchall()
+
+    async def resolve_raid_event(self, guild_id: int, event_id: int, resolved_by: int):
+        """Mark a raid event as resolved."""
+        await self.conn.execute(
+            "UPDATE raid_events SET resolved_at = datetime('now'), resolved_by = ? WHERE guild_id = ? AND id = ?",
+            (resolved_by, guild_id, event_id),
+        )
+        await self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Invite Tracking
+    # ------------------------------------------------------------------
+
+    async def track_invite_use(
+        self,
+        guild_id: int,
+        invite_code: str,
+        user_id: int,
+        inviter_id: int,
+        account_created: str | None = None,
+    ) -> bool:
+        """Track when a user joins via an invite."""
+        try:
+            await self.conn.execute(
+                "INSERT INTO invite_uses (guild_id, invite_code, user_id, inviter_id, account_created) VALUES (?, ?, ?, ?, ?)",
+                (guild_id, invite_code, user_id, inviter_id, account_created),
+            )
+            
+            # Update invite usage count
+            await self.conn.execute(
+                "UPDATE invite_codes SET uses = uses + 1 WHERE guild_id = ? AND invite_code = ?",
+                (guild_id, invite_code),
+            )
+            
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            # User already tracked for this guild
+            return False
+
+    async def update_invite_codes(self, guild_id: int, invites: list[discord.Invite]) -> None:
+        """Update the invite codes table with current server invites."""
+        for invite in invites:
+            if not invite.code or not invite.inviter:
+                continue
+
+            await self.conn.execute(
+                """INSERT OR REPLACE INTO invite_codes 
+                (guild_id, invite_code, inviter_id, channel_id, uses, max_uses, temporary, expires_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    guild_id,
+                    invite.code,
+                    invite.inviter.id,
+                    invite.channel.id if invite.channel else None,
+                    invite.uses or 0,
+                    invite.max_uses,
+                    int(invite.temporary or False),
+                    invite.expires_at.isoformat() if invite.expires_at else None,
+                ),
+            )
+        
+        await self.conn.commit()
+
+    async def get_invite_stats(self, guild_id: int, inviter_id: int | None = None):
+        """Get invite statistics for a guild or specific inviter."""
+        if inviter_id:
+            cur = await self.conn.execute(
+                """SELECT inviter_id, COUNT(*) as total_invites, 
+                   COUNT(CASE WHEN left_at IS NULL THEN 1 END) as active_invites,
+                   MIN(used_at) as first_invite, MAX(used_at) as last_invite
+                   FROM invite_uses 
+                   WHERE guild_id = ? AND inviter_id = ?""",
+                (guild_id, inviter_id),
+            )
+        else:
+            cur = await self.conn.execute(
+                """SELECT inviter_id, COUNT(*) as total_invites, 
+                   COUNT(CASE WHEN left_at IS NULL THEN 1 END) as active_invites,
+                   MIN(used_at) as first_invite, MAX(used_at) as last_invite
+                   FROM invite_uses 
+                   WHERE guild_id = ? 
+                   GROUP BY inviter_id 
+                   ORDER BY total_invites DESC""",
+                (guild_id,),
+            )
+        return await cur.fetchall()
+
+    async def get_invite_leaderboard(self, guild_id: int, limit: int = 10):
+        """Get top inviters for a guild."""
+        cur = await self.conn.execute(
+            """SELECT inviter_id, COUNT(*) as total_invites,
+                   COUNT(CASE WHEN left_at IS NULL THEN 1 END) as active_invites
+                   FROM invite_uses 
+                   WHERE guild_id = ? 
+                   GROUP BY inviter_id 
+                   ORDER BY total_invites DESC 
+                   LIMIT ?""",
+            (guild_id, limit),
+        )
+        return await cur.fetchall()
+
+    async def get_user_invite_info(self, guild_id: int, user_id: int):
+        """Get information about how a user joined."""
+        cur = await self.conn.execute(
+            """SELECT invite_code, inviter_id, used_at, account_created 
+               FROM invite_uses 
+               WHERE guild_id = ? AND user_id = ?""",
+            (guild_id, user_id),
+        )
+        return await cur.fetchone()
+
+    async def mark_user_left(self, guild_id: int, user_id: int) -> bool:
+        """Mark a user as having left the server."""
+        cur = await self.conn.execute(
+            "UPDATE invite_uses SET left_at = datetime('now') WHERE guild_id = ? AND user_id = ? AND left_at IS NULL",
+            (guild_id, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_recent_invites(self, guild_id: int, days: int = 7):
+        """Get recent invite activity for a guild."""
+        cur = await self.conn.execute(
+            """SELECT invite_code, inviter_id, user_id, used_at, left_at
+               FROM invite_uses 
+               WHERE guild_id = ? AND used_at > datetime('now', '-{} days')
+               ORDER BY used_at DESC""".format(days),
+            (guild_id,),
+        )
+        return await cur.fetchall()
+
+    async def cleanup_old_invite_data(self, guild_id: int, days: int = 90):
+        """Clean up old invite tracking data."""
+        cur = await self.conn.execute(
+            "DELETE FROM invite_uses WHERE guild_id = ? AND used_at < datetime('now', '-{} days')".format(days),
+            (guild_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # Birthday System
+    # ------------------------------------------------------------------
+
+    async def set_birthday(self, guild_id: int, user_id: int, birthday: str, timezone: str = "UTC") -> bool:
+        """Set a user's birthday."""
+        try:
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO birthdays (guild_id, user_id, birthday, timezone) VALUES (?, ?, ?, ?)",
+                (guild_id, user_id, birthday, timezone),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def get_birthday(self, guild_id: int, user_id: int):
+        """Get a user's birthday."""
+        cur = await self.conn.execute(
+            "SELECT * FROM birthdays WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        return await cur.fetchone()
+
+    async def get_birthdays_by_date(self, guild_id: int, date: str):
+        """Get all users with birthdays on a specific date (MM-DD format)."""
+        cur = await self.conn.execute(
+            "SELECT * FROM birthdays WHERE guild_id = ? AND birthday = ?",
+            (guild_id, date),
+        )
+        return await cur.fetchall()
+
+    async def remove_birthday(self, guild_id: int, user_id: int) -> bool:
+        """Remove a user's birthday."""
+        cur = await self.conn.execute(
+            "DELETE FROM birthdays WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def record_birthday_announcement(self, guild_id: int, user_id: int, date: str) -> bool:
+        """Record that a birthday announcement was sent for a user on a specific date."""
+        try:
+            await self.conn.execute(
+                "INSERT INTO birthday_announcements (guild_id, user_id, date_sent) VALUES (?, ?, ?)",
+                (guild_id, user_id, date),
+            )
+            await self.conn.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False  # Already recorded
+
+    async def check_birthday_announced(self, guild_id: int, user_id: int, date: str) -> bool:
+        """Check if a birthday announcement was already sent for a user on a specific date."""
+        cur = await self.conn.execute(
+            "SELECT 1 FROM birthday_announcements WHERE guild_id = ? AND user_id = ? AND date_sent = ?",
+            (guild_id, user_id, date),
+        )
+        return await cur.fetchone() is not None
+
+    async def cleanup_old_birthday_announcements(self, guild_id: int, days: int = 7):
+        """Clean up old birthday announcement records."""
+        cur = await self.conn.execute(
+            "DELETE FROM birthday_announcements WHERE guild_id = ? AND date_sent < date('now', '-{} days')".format(days),
+            (guild_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount

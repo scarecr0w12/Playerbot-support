@@ -359,9 +359,10 @@ def _push_embed(repo: str, payload: dict, actor: dict | None = None) -> discord.
     em.set_author(name=pusher_name, url=f"https://github.com/{pusher_name}", icon_url=avatar_url)
     lines = []
     for c in commits[:5]:
-        sha = c.get("id", "")[:7]
+        full_sha = c.get("sha") or c.get("id", "")
+        sha = full_sha[:7]
         msg = _trunc(c.get("message", "").splitlines()[0], 72)
-        url = c.get("url", "")
+        url = c.get("url", "") if c.get("url", "").startswith("https://github.com") else f"{repo_url}/commit/{full_sha}"
         lines.append(f"[`{sha}`]({url}) {msg}")
     if len(commits) > 5:
         lines.append(f"…and {len(commits) - 5} more")

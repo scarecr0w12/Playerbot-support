@@ -43,6 +43,11 @@ from bot.cogs.starboard import StarboardCog
 from bot.cogs.highlights import HighlightsCog
 from bot.cogs.github import GitHubCog
 from bot.cogs.gitlab import GitLabCog
+from bot.cogs.reaction_roles import ReactionRolesCog
+from bot.cogs.polls import PollsCog
+from bot.cogs.raid_protection import RaidProtectionCog
+from bot.cogs.invite_tracking import InviteTrackingCog
+from bot.cogs.birthdays import BirthdayCog
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,6 +150,11 @@ async def main() -> None:
     await bot.add_cog(HighlightsCog(bot, db))
     await bot.add_cog(GitHubCog(bot, db, config))
     await bot.add_cog(GitLabCog(bot, db, config))
+    await bot.add_cog(ReactionRolesCog(bot, db))
+    await bot.add_cog(PollsCog(bot, db))
+    await bot.add_cog(RaidProtectionCog(bot, db))
+    await bot.add_cog(InviteTrackingCog(bot, db))
+    await bot.add_cog(BirthdayCog(bot, db))
 
     # --- Bot-level interaction check for custom permission overrides ---
     @bot.tree.interaction_check

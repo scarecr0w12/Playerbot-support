@@ -181,6 +181,9 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         # --- Spam detection ---
         await self._check_spam(message)
 
+        # --- Mention spam detection ---
+        await self._check_mention_spam(message)
+
     async def _check_spam(self, message: discord.Message) -> None:
         guild_id = message.guild.id  # type: ignore[union-attr]
         user_id = message.author.id
@@ -197,6 +200,27 @@ class AutoModCog(commands.Cog, name="AutoMod"):
             self._spam_tracker[guild_id][user_id] = []
             await self._handle_violation(
                 message, "spam", f"Sent {threshold}+ messages in {window}s"
+            )
+
+    async def _check_mention_spam(self, message: discord.Message) -> None:
+        guild_id = message.guild.id  # type: ignore[union-attr]
+        
+        # Check if mention spam protection is enabled
+        mention_enabled = await self.db.get_guild_config(guild_id, "automod_mention_enabled")
+        if mention_enabled != "true":
+            return
+
+        # Get thresholds
+        threshold = await self.db.get_setting_int(guild_id, "automod_mention_threshold") or 5
+        role_mentions = len(message.role_mentions)
+        user_mentions = len(message.mentions)
+        total_mentions = role_mentions + user_mentions
+
+        if total_mentions >= threshold:
+            await self._handle_violation(
+                message, 
+                "mention_spam", 
+                f"Too many mentions ({total_mentions}/{threshold})"
             )
 
     async def _handle_violation(self, message: discord.Message, violation_type: str, detail: str) -> None:
@@ -245,6 +269,28 @@ class AutoModCog(commands.Cog, name="AutoMod"):
             f"✅ Spam interval set to **{seconds}** second(s).", ephemeral=True
         )
 
+    @automodset_group.command(name="mention_enable", description="Enable mention spam protection")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def mention_enable(self, interaction: discord.Interaction) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "automod_mention_enabled", "true")  # type: ignore[arg-type]
+        await interaction.response.send_message("✅ Mention spam protection enabled.", ephemeral=True)
+
+    @automodset_group.command(name="mention_disable", description="Disable mention spam protection")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def mention_disable(self, interaction: discord.Interaction) -> None:
+        await self.db.set_guild_config(interaction.guild_id, "automod_mention_enabled", "false")  # type: ignore[arg-type]
+        await interaction.response.send_message("⚠️ Mention spam protection disabled.", ephemeral=True)
+
+    @automodset_group.command(name="mention_threshold", description="Set mention spam threshold")
+    @app_commands.describe(threshold="Maximum mentions per message before deletion")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def mention_threshold(self, interaction: discord.Interaction, threshold: int) -> None:
+        if threshold < 1 or threshold > 50:
+            await interaction.response.send_message("❌ Threshold must be between 1 and 50.", ephemeral=True)
+            return
+        await self.db.set_guild_config(interaction.guild_id, "automod_mention_threshold", str(threshold))  # type: ignore[arg-type]
+        await interaction.response.send_message(f"✅ Mention threshold set to {threshold} mentions.", ephemeral=True)
+
     @automodset_group.command(name="show", description="Show current auto-mod settings")
     @app_commands.checks.has_permissions(administrator=True)
     async def show_automod_settings(self, interaction: discord.Interaction) -> None:
@@ -254,8 +300,12 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         interval = await self.db.get_setting(guild_id, "automod_spam_interval")
         enabled_raw = await self.db.get_guild_config(guild_id, "automod_enabled")
         enabled = "Disabled" if enabled_raw == "0" else "Enabled"
+        mention_enabled = await self.db.get_guild_config(guild_id, "automod_mention_enabled")
+        mention_threshold = await self.db.get_setting(guild_id, "automod_mention_threshold")
         embed = discord.Embed(title="⚙️ Auto-Mod Settings", color=discord.Color.orange())
         embed.add_field(name="Status", value=enabled, inline=True)
         embed.add_field(name="Spam threshold", value=f"{threshold} messages", inline=True)
         embed.add_field(name="Spam interval", value=f"{interval} second(s)", inline=True)
+        embed.add_field(name="Mention spam protection", value="Enabled" if mention_enabled == "true" else "Disabled", inline=True)
+        embed.add_field(name="Mention threshold", value=f"{mention_threshold} mentions", inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
