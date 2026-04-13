@@ -135,7 +135,7 @@ async def main() -> None:
     await bot.add_cog(EconomyCog(bot, db))
     await bot.add_cog(ReportsCog(bot, db))
     await bot.add_cog(UtilityCog(bot))
-    await bot.add_cog(VoiceMusicCog(bot))
+    await bot.add_cog(VoiceMusicCog(bot, db))
     await bot.add_cog(SupportCog(bot, db, llm, qdrant, mcp_manager))
     await bot.add_cog(MCPCog(bot, db, mcp_manager))
     await bot.add_cog(LevelsCog(bot, db))

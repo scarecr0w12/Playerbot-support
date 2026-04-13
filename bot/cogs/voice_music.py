@@ -12,15 +12,18 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 import yt_dlp
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from bot.db import Database
 
-_MAX_QUEUE = 50
+logger = logging.getLogger(__name__)
 _YTDL_OPTS: dict = {
     "format": "bestaudio/best",
     "noplaylist": True,
@@ -112,16 +115,51 @@ def _blocking_extract(query: str) -> Track | None:
 class VoiceMusicCog(commands.Cog, name="Voice & Music"):
     """Music queue + basic voice-channel moderation."""
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: commands.Bot, db: "Database") -> None:
         self.bot = bot
+        self.db = db
         self._music: dict[int, GuildMusicState] = {}
 
-    def _state(self, guild_id: int) -> GuildMusicState:
+    async def _read_bounded_int(self, guild_id: int, key: str, default: int, lo: int, hi: int) -> int:
+        raw = await self.db.get_guild_config(guild_id, key)
+        if raw is None:
+            return default
+        try:
+            return max(lo, min(hi, int(raw)))
+        except ValueError:
+            return default
+
+    async def _music_module_enabled(self, guild_id: int) -> bool:
+        v = await self.db.get_guild_config(guild_id, "music_enabled")
+        return v != "0"
+
+    async def _max_queue(self, guild_id: int) -> int:
+        return await self._read_bounded_int(guild_id, "music_max_queue", 50, 5, 100)
+
+    async def _inactivity_seconds(self, guild_id: int) -> int:
+        minutes = await self._read_bounded_int(guild_id, "music_inactivity_minutes", 3, 1, 60)
+        return minutes * 60
+
+    async def _ensure_state(self, guild_id: int) -> GuildMusicState:
         st = self._music.get(guild_id)
         if st is None:
-            st = GuildMusicState(guild_id=guild_id)
+            vol_pct = await self._read_bounded_int(guild_id, "music_default_volume", 100, 0, 200)
+            st = GuildMusicState(guild_id=guild_id, volume=_sanitize_volume(vol_pct))
             self._music[guild_id] = st
         return st
+
+    async def _ensure_music_allowed(self, interaction: discord.Interaction) -> bool:
+        gid = interaction.guild_id
+        if gid is None:
+            return True
+        if await self._music_module_enabled(gid):
+            return True
+        msg = "Music is disabled for this server. Ask a server admin to enable it in the dashboard under **Voice & Music**."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return False
 
     async def cog_unload(self) -> None:
         for st in list(self._music.values()):
@@ -136,7 +174,8 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     async def _inactivity_leave(self, guild_id: int) -> None:
         try:
-            await asyncio.sleep(180)
+            delay = await self._inactivity_seconds(guild_id)
+            await asyncio.sleep(delay)
             st = self._music.get(guild_id)
             if not st or not st.voice or not st.voice.is_connected():
                 return
@@ -155,7 +194,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
             logger.exception("inactivity_leave guild=%s", guild_id)
 
     def _schedule_inactivity(self, guild_id: int) -> None:
-        st = self._state(guild_id)
+        st = self._music.get(guild_id)
+        if not st:
+            return
         st.cancel_inactivity()
         st.inactivity_task = asyncio.create_task(self._inactivity_leave(guild_id))
 
@@ -192,13 +233,17 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
         asyncio.run_coroutine_threadsafe(self._advance(guild_id), self.bot.loop)
 
     async def _advance(self, guild_id: int) -> None:
-        st = self._state(guild_id)
+        st = self._music.get(guild_id)
+        if not st:
+            return
         async with st.lock:
             st.current = None
         await self._start_playback(guild_id)
 
     async def _start_playback(self, guild_id: int) -> None:
-        st = self._state(guild_id)
+        st = self._music.get(guild_id)
+        if not st:
+            return
         if not st.voice or not st.voice.is_connected():
             return
         async with st.lock:
@@ -241,7 +286,7 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
         if not isinstance(ch, discord.VoiceChannel):
             return None, None
 
-        st = self._state(interaction.guild.id)
+        st = await self._ensure_state(interaction.guild.id)
         perms = ch.permissions_for(interaction.guild.me)
         if not perms.connect or not perms.speak:
             return None, None
@@ -267,6 +312,8 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="join", description="Join your current voice channel")
     async def music_join(self, interaction: discord.Interaction) -> None:
+        if not await self._ensure_music_allowed(interaction):
+            return
         await interaction.response.defer(ephemeral=True)
         u = interaction.user
         uv = u.voice if isinstance(u, discord.Member) else None  # type: ignore[union-attr]
@@ -298,6 +345,8 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
     @music.command(name="play", description="Add a track to the queue (URL or search words)")
     @app_commands.describe(query="Link or search query")
     async def music_play(self, interaction: discord.Interaction, query: str) -> None:
+        if not await self._ensure_music_allowed(interaction):
+            return
         await interaction.response.defer()
         u = interaction.user
         uv = u.voice if isinstance(u, discord.Member) else None  # type: ignore[union-attr]
@@ -337,9 +386,10 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
             requester_id=interaction.user.id,
         )
 
+        max_q = await self._max_queue(interaction.guild.id)  # type: ignore[union-attr]
         async with st.lock:
-            if len(st.queue) >= _MAX_QUEUE:
-                await interaction.followup.send(f"Queue is full (max {_MAX_QUEUE}).", ephemeral=True)
+            if len(st.queue) >= max_q:
+                await interaction.followup.send(f"Queue is full (max {max_q}).", ephemeral=True)
                 return
             st.queue.append(track)
 
@@ -355,7 +405,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="pause", description="Pause playback")
     async def music_pause(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         if not st.voice or not st.voice.is_playing():
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
@@ -364,7 +416,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="resume", description="Resume playback")
     async def music_resume(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         if not st.voice or not st.voice.is_paused():
             await interaction.response.send_message("Nothing is paused.", ephemeral=True)
             return
@@ -373,7 +427,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="skip", description="Skip the current track")
     async def music_skip(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         if not st.voice or not st.voice.is_playing():
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
@@ -382,7 +438,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="stop", description="Stop and clear the queue")
     async def music_stop(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         async with st.lock:
             st.queue.clear()
             st.current = None
@@ -392,8 +450,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="leave", description="Disconnect from voice")
     async def music_leave(self, interaction: discord.Interaction) -> None:
+        # Allowed even when the music module is disabled so the bot can be cleared from voice.
         gid = interaction.guild_id  # type: ignore[assignment]
-        st = self._state(gid)
+        st = await self._ensure_state(gid)
         st.cancel_inactivity()
         async with st.lock:
             st.queue.clear()
@@ -405,7 +464,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="queue", description="Show the current queue")
     async def music_queue(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         lines: list[str] = []
         if st.current:
             lines.append(f"**Now:** {st.current.title}")
@@ -421,7 +482,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
 
     @music.command(name="nowplaying", description="Show the track that is playing")
     async def music_np(self, interaction: discord.Interaction) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         if not st.current:
             await interaction.response.send_message("Nothing is playing.", ephemeral=True)
             return
@@ -438,7 +501,9 @@ class VoiceMusicCog(commands.Cog, name="Voice & Music"):
     @music.command(name="volume", description="Set playback volume (0–200%)")
     @app_commands.describe(percent="Volume percentage (default 100)")
     async def music_volume(self, interaction: discord.Interaction, percent: int = 100) -> None:
-        st = self._state(interaction.guild_id)  # type: ignore[arg-type]
+        if not await self._ensure_music_allowed(interaction):
+            return
+        st = await self._ensure_state(interaction.guild_id)  # type: ignore[arg-type]
         st.volume = _sanitize_volume(percent)
         src = st.voice.source if st.voice else None
         if isinstance(src, discord.PCMVolumeTransformer):

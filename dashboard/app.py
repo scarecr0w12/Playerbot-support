@@ -25,7 +25,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from dashboard.dynamic_config_schema import DynamicConfigSchema
 from dashboard.routes.github_integrations import GitHubIntegrationsModule
 from dashboard.routes.gitlab_integrations import GitLabIntegrationsModule
-from dashboard.routes import auth, overview, assistant, community, moderation, economy, misc, knowledge
+from dashboard.routes import auth, overview, assistant, community, moderation, economy, misc, knowledge, voice_music
 from dashboard.routes import config as config_routes
 from dashboard.helpers import (
     DB_PATH,
@@ -77,6 +77,7 @@ app.include_router(community.init(templates))
 app.include_router(moderation.init(templates))
 app.include_router(economy.init(templates))
 app.include_router(misc.init(templates))
+app.include_router(voice_music.init(templates))
 app.include_router(knowledge.init(templates))
 
 # ---------------------------------------------------------------------------

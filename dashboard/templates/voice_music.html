@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Voice &amp; Music — Bot Dashboard{% endblock %}
+{% block header %}Voice &amp; Music{% endblock %}
+
+{% block content %}
+<div class="flex flex-col xl:flex-row gap-6">
+  <div class="w-full xl:w-64 flex-shrink-0">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        {% for g in guilds %}
+        <a href="/voice-music?guild_id={{ g.guild_id }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <div class="flex-1 min-w-0 space-y-6">
+    <div class="card p-5">
+      <h2 class="font-semibold text-white mb-1">Music playback</h2>
+      <p class="text-xs text-gray-500 mb-4">
+        These settings apply to <span class="font-mono text-gray-400">/music</span> slash commands. The host running the bot still needs
+        <strong class="text-gray-400">FFmpeg</strong> on <span class="font-mono">PATH</span>. Discord slash commands <span class="font-mono">/voice move</span>,
+        <span class="font-mono">/voice disconnect</span>, and <span class="font-mono">/voice members</span> are not toggled here.
+      </p>
+
+      {% if guild_id %}
+      <form method="post" action="/voice-music/save" class="space-y-4 max-w-lg">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Music module</label>
+          <select name="music_enabled" class="input w-full">
+            <option value="1" {% if music_enabled %}selected{% endif %}>Enabled</option>
+            <option value="0" {% if not music_enabled %}selected{% endif %}>Disabled</option>
+          </select>
+          <p class="text-[0.65rem] text-gray-600 mt-1">When disabled, members cannot use <span class="font-mono">/music</span> commands.</p>
+        </div>
+
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Default volume (0–200%)</label>
+          <input type="number" name="music_default_volume" class="input w-full" min="0" max="200" value="{{ music_default_volume }}" required/>
+          <p class="text-[0.65rem] text-gray-600 mt-1">Applied when the bot first joins a session for this guild. Runtime <span class="font-mono">/music volume</span> still works.</p>
+        </div>
+
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Idle disconnect (minutes)</label>
+          <input type="number" name="music_inactivity_minutes" class="input w-full" min="1" max="60" value="{{ music_inactivity_minutes }}" required/>
+          <p class="text-[0.65rem] text-gray-600 mt-1">How long to wait with an empty queue and no listeners before leaving voice.</p>
+        </div>
+
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Max queue length</label>
+          <input type="number" name="music_max_queue" class="input w-full" min="5" max="100" value="{{ music_max_queue }}" required/>
+        </div>
+
+        <button type="submit" class="btn-primary"><i class="fa fa-floppy-disk"></i> Save settings</button>
+      </form>
+      {% else %}
+      <p class="text-gray-500 text-sm">Select a guild to edit music settings.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
