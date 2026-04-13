@@ -134,11 +134,7 @@ class TicketsCog(commands.Cog, name="Tickets"):
     ticket_group = app_commands.Group(name="ticket", description="Ticket system management")
 
     @ticket_group.command(name="panel", description="Post a ticket panel with an Open Ticket button")
-    @app_commands.describe(
-        channel="Channel to post the panel in",
-        title="Title for the ticket panel embed",
-        description="Description for the ticket panel"
-    )
+    @app_commands.describe(channel="Channel to post the panel in")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def ticket_panel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         embed = discord.Embed(
