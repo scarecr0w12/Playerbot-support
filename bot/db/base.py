@@ -24,6 +24,8 @@ class BaseDatabase:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         self._db = await aiosqlite.connect(DB_PATH)
         self._db.row_factory = aiosqlite.Row
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.executescript(SCHEMA)
         await self._db.commit()
         await self._migrate()
