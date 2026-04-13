@@ -2,10 +2,21 @@
 {% block title %}Giveaways — Bot Dashboard{% endblock %}
 {% block header %}Giveaways{% endblock %}
 
+{% block head_extra %}
+<style>
+  .badge-active { background: rgba(16,185,145,0.13); color: #4ade80; }
+  .badge-ended  { background: rgba(107,114,128,0.13); color: #9ca3af; }
+  .badge-all    { background: rgba(88,101,242,0.13); color: #a5b4fc; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="flex flex-col xl:flex-row gap-6">
-  <!-- Guild selector -->
-  <div class="w-full xl:w-64 flex-shrink-0">
+
+  <!-- Left sidebar: guild selector + filters + create form -->
+  <div class="w-full xl:w-72 flex-shrink-0 space-y-4">
+
+    <!-- Guild selector -->
     <div class="card p-4">
       <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
       <div class="space-y-1">
@@ -21,11 +32,11 @@
         {% endfor %}
       </div>
     </div>
-    
-    <!-- Filters -->
+
     {% if guild_id %}
-    <div class="card p-4 mt-4">
-      <h3 class="text-sm font-semibold text-gray-300 mb-3">Filters</h3>
+    <!-- Filters -->
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Filter</h3>
       <form method="get" action="/giveaways" class="space-y-3">
         <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
         <div>
@@ -36,58 +47,166 @@
             <option value="all"    {% if status == 'all'    %}selected{% endif %}>All</option>
           </select>
         </div>
-        <button type="submit" class="btn-primary w-full"><i class="fa fa-filter"></i> Filter</button>
+        <button type="submit" class="btn-primary w-full text-sm"><i class="fa fa-filter mr-1"></i> Filter</button>
+      </form>
+    </div>
+
+    <!-- Create giveaway -->
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+        <i class="fa fa-gift text-[#5865F2]"></i> New Giveaway
+      </h3>
+      <form method="post" action="/giveaways/create" class="space-y-3" id="createForm">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Prize <span class="text-red-400">*</span></label>
+          <input type="text" name="prize" required maxlength="200" placeholder="e.g. Nitro Classic" class="input"/>
+        </div>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Duration <span class="text-red-400">*</span></label>
+          <input type="text" name="duration" required placeholder="e.g. 1d, 2h30m, 30m" class="input" pattern="(\d+\s*[dhms])+.*"/>
+          <span class="helper-text">Format: <code class="text-xs text-[#8fa8ff]">1d</code>, <code class="text-xs text-[#8fa8ff]">2h30m</code>, <code class="text-xs text-[#8fa8ff]">45s</code></span>
+        </div>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Winners</label>
+          <input type="number" name="winner_count" value="1" min="1" max="20" class="input"/>
+        </div>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Channel ID <span class="text-red-400">*</span></label>
+          <div class="flex gap-2">
+            <input type="number" name="channel_id" required placeholder="Channel ID" class="input" id="channelInput"/>
+            <button type="button" data-guild="{{ guild_id }}" onclick="loadChannels(this.dataset.guild)"
+                    class="btn-secondary text-xs flex-shrink-0 px-2" title="Load channels">
+              <i class="fa fa-rotate"></i>
+            </button>
+          </div>
+          <select id="channelSelect" class="input hidden" onchange="document.getElementById('channelInput').value=this.value">
+            <option value="">— pick channel —</option>
+          </select>
+        </div>
+
+        <button type="submit" class="btn-primary w-full text-sm">
+          <i class="fa fa-rocket mr-1"></i> Launch Giveaway
+        </button>
       </form>
     </div>
     {% endif %}
   </div>
 
-  <!-- Giveaways table -->
+  <!-- Main: giveaways table -->
   <div class="flex-1 min-w-0">
     <div class="card overflow-hidden">
       <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 gap-2">
         <h2 class="font-semibold text-white min-w-0 truncate">
-          {% if guild_id %}Giveaways for <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}All Giveaways{% endif %}
+          {% if guild_id %}
+            Giveaways — <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>
+            <span class="ml-2 badge {% if status=='active' %}badge-active{% elif status=='ended' %}badge-ended{% else %}badge-all{% endif %}">{{ status }}</span>
+          {% else %}All Giveaways{% endif %}
         </h2>
         <span class="text-xs text-gray-500 flex-shrink-0">{{ giveaways|length }} shown</span>
       </div>
-  <div class="table-scroll">
-  <table class="w-full text-sm">
-    <thead>
-      <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
-        <th class="px-4 py-3 font-medium">#</th>
-        <th class="px-4 py-3 font-medium">Status</th>
-        <th class="px-4 py-3 font-medium">Prize</th>
-        <th class="px-4 py-3 font-medium">Winners</th>
-        <th class="px-4 py-3 font-medium">Host ID</th>
-        <th class="px-4 py-3 font-medium">End Time</th>
-        <th class="px-4 py-3 font-medium">Channel ID</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for g in giveaways %}
-      <tr class="table-row">
-        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.id }}</td>
-        <td class="px-4 py-3">
-          {% if g.status == 'active' %}
-          <span class="badge" style="background:#10b98122;color:#4ade80;">Active</span>
-          {% else %}
-          <span class="badge" style="background:#6b728022;color:#9ca3af;">Ended</span>
-          {% endif %}
-        </td>
-        <td class="px-4 py-3 text-gray-200 font-medium">{{ g.prize }}</td>
-        <td class="px-4 py-3 text-gray-400 text-center">{{ g.winner_count }}</td>
-        <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ g.host_id }}</td>
-        <td class="px-4 py-3 text-gray-400 text-xs">{{ g.end_time[:16] if g.end_time else "—" }}</td>
-        <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.channel_id }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="7" class="px-4 py-10 text-center text-gray-500">No giveaways found</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
+
+      <div class="table-scroll">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+              <th class="px-4 py-3 font-medium">#</th>
+              <th class="px-4 py-3 font-medium">Status</th>
+              <th class="px-4 py-3 font-medium">Prize</th>
+              <th class="px-4 py-3 font-medium">Winners</th>
+              <th class="px-4 py-3 font-medium">Entries</th>
+              <th class="px-4 py-3 font-medium">Ends</th>
+              <th class="px-4 py-3 font-medium">Channel</th>
+              {% if guild_id %}<th class="px-4 py-3 font-medium">Actions</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for g in giveaways %}
+            <tr class="table-row">
+              <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.id }}</td>
+              <td class="px-4 py-3">
+                {% if g.status == 'active' %}
+                <span class="badge" style="background:#10b98122;color:#4ade80;">Active</span>
+                {% else %}
+                <span class="badge" style="background:#6b728022;color:#9ca3af;">Ended</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-3 text-gray-200 font-medium max-w-[180px] truncate" title="{{ g.prize }}">{{ g.prize }}</td>
+              <td class="px-4 py-3 text-gray-400 text-center">{{ g.winner_count }}</td>
+              <td class="px-4 py-3 text-gray-400 text-center">{{ entry_counts.get(g.id, 0) }}</td>
+              <td class="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{{ g.end_time[:16] if g.end_time else "—" }}</td>
+              <td class="px-4 py-3 text-gray-500 font-mono text-xs">{{ g.channel_id }}</td>
+              {% if guild_id %}
+              <td class="px-4 py-3">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  {% if g.status == 'active' %}
+                  <form method="post" action="/giveaways/end" class="inline"
+                        onsubmit="return confirm('End giveaway #{{ g.id }} and pick winners now?')">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="giveaway_id" value="{{ g.id }}"/>
+                    <button type="submit" class="btn-success text-xs">
+                      <i class="fa fa-flag-checkered"></i> End
+                    </button>
+                  </form>
+                  <form method="post" action="/giveaways/cancel" class="inline"
+                        onsubmit="return confirm('Cancel giveaway #{{ g.id }}? No winners will be picked.')">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="giveaway_id" value="{{ g.id }}"/>
+                    <button type="submit" class="btn-danger text-xs">
+                      <i class="fa fa-xmark"></i> Cancel
+                    </button>
+                  </form>
+                  {% else %}
+                  <form method="post" action="/giveaways/reroll" class="inline">
+                    <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                    <input type="hidden" name="giveaway_id" value="{{ g.id }}"/>
+                    <button type="submit" class="btn-secondary text-xs">
+                      <i class="fa fa-dice"></i> Reroll
+                    </button>
+                  </form>
+                  {% endif %}
+                </div>
+              </td>
+              {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="{% if guild_id %}8{% else %}7{% endif %}" class="px-4 py-12 text-center text-gray-500">
+                <i class="fa fa-gift text-2xl mb-2 block opacity-30"></i>
+                No giveaways found
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
+
+<script>
+async function loadChannels(guildId) {
+  const select = document.getElementById('channelSelect');
+  const input  = document.getElementById('channelInput');
+  select.innerHTML = '<option value="">Loading…</option>';
+  select.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/guild-channels/${guildId}`);
+    const data = await resp.json();
+    select.innerHTML = '<option value="">— pick channel —</option>';
+    (data.channels || []).forEach(ch => {
+      const opt = document.createElement('option');
+      opt.value = ch.id;
+      opt.textContent = `#${ch.name}`;
+      select.appendChild(opt);
+    });
+  } catch(e) {
+    select.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+</script>
 {% endblock %}
