@@ -142,6 +142,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
     @tasks.loop(seconds=30)
     async def _giveaway_loop(self) -> None:
         now = datetime.now(timezone.utc)
+        await self.db.conn.commit()
         rows = await self.db.get_active_giveaways()
         for row in rows:
             try:
