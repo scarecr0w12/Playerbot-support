@@ -129,10 +129,10 @@ class AutoModCog(commands.Cog, name="AutoMod"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /automod_toggle — enable/disable automod
+    # /automodset toggle — enable/disable automod
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="automod_toggle", description="Enable or disable auto-moderation")
+    @automodset_group.command(name="toggle", description="Enable or disable auto-moderation")
     @app_commands.describe(enabled="Turn automod on or off")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def automod_toggle(self, interaction: discord.Interaction, enabled: bool) -> None:

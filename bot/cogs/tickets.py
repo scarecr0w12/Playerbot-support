@@ -2,12 +2,12 @@
 
 Flow
 ----
-1. Admin runs ``/ticket_panel`` to post a persistent button embed in a channel.
+1. Admin runs ``/ticket panel`` to post a persistent button embed in a channel.
 2. User clicks **Open Ticket** → a modal asks for a subject & description.
 3. Bot creates a private channel, pins the ticket info, and adds control buttons
    (Claim, Close, Transcript).
 4. All messages in the ticket channel are logged for transcript.
-5. Staff can ``/ticket_close`` or click Close to archive the ticket.
+5. Staff can ``/ticket close`` or click Close to archive the ticket.
 """
 
 from __future__ import annotations
@@ -113,14 +113,13 @@ class TicketControlView(discord.ui.View):
 # ======================================================================
 
 class TicketsCog(commands.Cog, name="Tickets"):
-    """Channel-per-ticket support system with modals and buttons."""
+    """Ticket system with buttons, transcripts, and auto-categorization."""
 
     def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
         self.db = db
 
     async def cog_load(self) -> None:
-        # Register persistent views so they survive restarts
         self.bot.add_view(TicketPanelView(self))
         self.bot.add_view(TicketControlView(self))
 
@@ -129,12 +128,18 @@ class TicketsCog(commands.Cog, name="Tickets"):
         return self.bot.get_cog("ModLogging")  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
-    # /ticket_panel — post the persistent Open-Ticket embed
+    # Ticket command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="ticket_panel", description="Post a ticket panel with an Open Ticket button")
-    @app_commands.describe(channel="Channel to post the panel in")
-    @app_commands.checks.has_permissions(administrator=True)
+    ticket_group = app_commands.Group(name="ticket", description="Ticket system management")
+
+    @ticket_group.command(name="panel", description="Post a ticket panel with an Open Ticket button")
+    @app_commands.describe(
+        channel="Channel to post the panel in",
+        title="Title for the ticket panel embed",
+        description="Description for the ticket panel"
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def ticket_panel(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         embed = discord.Embed(
             title="🎫 Support Tickets",
@@ -148,13 +153,9 @@ class TicketsCog(commands.Cog, name="Tickets"):
         await channel.send(embed=embed, view=TicketPanelView(self))
         await interaction.response.send_message(f"✅ Ticket panel posted in {channel.mention}.", ephemeral=True)
 
-    # ------------------------------------------------------------------
-    # /ticket_category — set the category for ticket channels
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="ticket_category", description="Set the category for new ticket channels")
-    @app_commands.describe(category="The category to create ticket channels under")
-    @app_commands.checks.has_permissions(administrator=True)
+    @ticket_group.command(name="category", description="Set the category for new ticket channels")
+    @app_commands.describe(category="Category for new ticket channels")
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def ticket_category(
         self, interaction: discord.Interaction, category: discord.CategoryChannel
     ) -> None:
@@ -588,9 +589,9 @@ class TicketsCog(commands.Cog, name="Tickets"):
     # /ticket_close — slash command variant
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="ticket_close", description="Close the current ticket")
-    @app_commands.checks.has_permissions(manage_messages=True)
-    async def ticket_close_cmd(self, interaction: discord.Interaction) -> None:
+    @ticket_group.command(name="close", description="Close the current ticket")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def ticket_close(self, interaction: discord.Interaction) -> None:
         await self.close_ticket_button(interaction)
 
     # ------------------------------------------------------------------

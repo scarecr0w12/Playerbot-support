@@ -85,10 +85,12 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         self.bot.add_view(RulesAcceptView(self))
 
     # ------------------------------------------------------------------
-    # Configuration commands
+    # Welcome command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="set_welcome_channel", description="Set the welcome channel")
+    welcome_group = app_commands.Group(name="welcome", description="Welcome message and image settings")
+
+    @welcome_group.command(name="channel", description="Set the welcome channel")
     @app_commands.describe(channel="Channel to send welcome messages in")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_welcome_channel(
@@ -99,7 +101,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             f"✅ Welcome channel set to {channel.mention}.", ephemeral=True
         )
 
-    @app_commands.command(name="set_welcome_message", description="Set the welcome message template")
+    @welcome_group.command(name="message", description="Set the welcome message template")
     @app_commands.describe(
         message="Use {user} for mention, {username} for name, {server} for server name"
     )
@@ -110,7 +112,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             f"✅ Welcome message updated.\n**Preview:**\n{message}", ephemeral=True
         )
 
-    @app_commands.command(name="set_autorole", description="Set a role to auto-assign to new members")
+    @welcome_group.command(name="autorole", description="Set a role to auto-assign to new members")
     @app_commands.describe(role="The role to give new members")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_autorole(self, interaction: discord.Interaction, role: discord.Role) -> None:
@@ -119,7 +121,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             f"✅ Auto-role set to **{role.name}**.", ephemeral=True
         )
 
-    @app_commands.command(name="set_verified_role", description="Set the role granted by rules acceptance")
+    @welcome_group.command(name="verified_role", description="Set the role granted by rules acceptance")
     @app_commands.describe(role="The role to grant when a user accepts the rules")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_verified_role(self, interaction: discord.Interaction, role: discord.Role) -> None:
@@ -132,7 +134,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     # Welcome image configuration
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="welcome_images_enable", description="Enable visual welcome cards")
+    @welcome_group.command(name="images_enable", description="Enable visual welcome cards")
     @app_commands.checks.has_permissions(administrator=True)
     async def welcome_images_enable(self, interaction: discord.Interaction) -> None:
         await self.db.set_guild_config(interaction.guild_id, "welcome_images_enabled", "true")  # type: ignore[arg-type]
@@ -141,7 +143,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             ephemeral=True,
         )
 
-    @app_commands.command(name="welcome_images_disable", description="Disable visual welcome cards")
+    @welcome_group.command(name="images_disable", description="Disable visual welcome cards")
     @app_commands.checks.has_permissions(administrator=True)
     async def welcome_images_disable(self, interaction: discord.Interaction) -> None:
         await self.db.set_guild_config(interaction.guild_id, "welcome_images_enabled", "false")  # type: ignore[arg-type]
@@ -150,7 +152,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             ephemeral=True,
         )
 
-    @app_commands.command(name="welcome_images_style", description="Set welcome image style")
+    @welcome_group.command(name="images_style", description="Set welcome image style")
     @app_commands.describe(
         style="Style of welcome image (modern, minimalist, colorful)"
     )
@@ -170,7 +172,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
             ephemeral=True,
         )
 
-    @app_commands.command(name="welcome_images_preview", description="Preview a welcome image")
+    @welcome_group.command(name="images_preview", description="Preview a welcome image")
     @app_commands.checks.has_permissions(administrator=True)
     async def welcome_images_preview(self, interaction: discord.Interaction) -> None:
         """Generate a preview welcome image."""
@@ -307,7 +309,7 @@ class WelcomeCog(commands.Cog, name="Welcome"):
         ]
         return random.choice(color_sets)
 
-    @app_commands.command(name="rules_panel", description="Post a rules acceptance panel with a button")
+    @welcome_group.command(name="rules_panel", description="Post a rules acceptance panel with a button")
     @app_commands.describe(channel="Channel to post the rules panel in", rules_text="The rules text to display")
     @app_commands.checks.has_permissions(administrator=True)
     async def rules_panel(

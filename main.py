@@ -46,11 +46,9 @@ from bot.cogs.gitlab import GitLabCog
 from bot.cogs.reaction_roles import ReactionRolesCog
 from bot.cogs.polls import PollsCog
 from bot.cogs.raid_protection import RaidProtectionCog
-# Temporarily disabled to reduce slash command count below Discord's 100 limit
-# Uncomment these as needed, but be mindful of the global command limit
-# from bot.cogs.invite_tracking import InviteTrackingCog
-# from bot.cogs.birthdays import BirthdayCog
-# from bot.cogs.social_alerts import SocialAlertsCog
+from bot.cogs.invite_tracking import InviteTrackingCog
+from bot.cogs.birthdays import BirthdayCog
+from bot.cogs.social_alerts import SocialAlertsCog
 
 logging.basicConfig(
     level=logging.INFO,
@@ -156,11 +154,9 @@ async def main() -> None:
     await bot.add_cog(ReactionRolesCog(bot, db))
     await bot.add_cog(PollsCog(bot, db))
     await bot.add_cog(RaidProtectionCog(bot, db))
-    # Temporarily disabled to reduce slash command count below Discord's 100 limit
-    # Uncomment these as needed, but be mindful of the global command limit
-    # await bot.add_cog(InviteTrackingCog(bot, db))
-    # await bot.add_cog(BirthdayCog(bot, db))
-    # await bot.add_cog(SocialAlertsCog(bot, db))
+    await bot.add_cog(InviteTrackingCog(bot, db))
+    await bot.add_cog(BirthdayCog(bot, db))
+    await bot.add_cog(SocialAlertsCog(bot, db))
 
     # --- Bot-level interaction check for custom permission overrides ---
     @bot.tree.interaction_check

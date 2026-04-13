@@ -66,17 +66,14 @@ class ReportsCog(commands.Cog, name="Reports"):
         await interaction.response.send_modal(ReportModal(self, member))
 
     # ------------------------------------------------------------------
-    # /report
+    # Reports command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="report", description="Report a user to the staff team")
-    @app_commands.describe(member="The user to report", reason="Why you are reporting them")
-    async def report(
-        self, interaction: discord.Interaction, member: discord.Member, reason: str
-    ) -> None:
-        await self.submit_report(interaction, member, reason)
+    reports_group = app_commands.Group(name="report", description="User reporting system")
 
-    async def submit_report(
+    @reports_group.command(name="submit", description="Report a user to the staff team")
+    @app_commands.describe(member="The user to report", reason="Why you are reporting them")
+    async def report_submit(
         self, interaction: discord.Interaction, member: discord.Member, reason: str
     ) -> None:
         guild = interaction.guild
@@ -96,7 +93,7 @@ class ReportsCog(commands.Cog, name="Reports"):
                 target=member,
                 moderator=interaction.user,
                 reason=reason,
-                extra=f"**Report #{report_id}**",
+                extra=f"Report ID: {report_id}",
             )
 
         # Also try sending to a reports channel if configured
@@ -111,17 +108,13 @@ class ReportsCog(commands.Cog, name="Reports"):
                 embed.add_field(name="Reported User", value=f"{member.mention} ({member.id})", inline=True)
                 embed.add_field(name="Reporter", value=f"{interaction.user.mention}", inline=True)
                 embed.add_field(name="Reason", value=reason, inline=False)
-                embed.set_footer(text=f"Use /report_resolve {report_id} to handle this report")
+                embed.set_footer(text=f"Use /report resolve {report_id} to handle this report")
                 try:
                     await ch.send(embed=embed)
                 except discord.Forbidden:
                     pass
 
-    # ------------------------------------------------------------------
-    # /report_resolve
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="report_resolve", description="Resolve an open report")
+    @reports_group.command(name="resolve", description="Resolve an open report")
     @app_commands.describe(
         report_id="The report ID to resolve",
         note="Resolution note",
@@ -150,7 +143,7 @@ class ReportsCog(commands.Cog, name="Reports"):
     # /reports — list open reports
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="reports", description="View open reports")
+    @reports_group.command(name="reports", description="View open reports")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def reports_list(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
@@ -178,7 +171,7 @@ class ReportsCog(commands.Cog, name="Reports"):
     # /set_reports_channel
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="set_reports_channel", description="Set the channel for report notifications")
+    @reports_group.command(name="set_reports_channel", description="Set the channel for report notifications")
     @app_commands.describe(channel="The channel to send report embeds to")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_reports_channel(

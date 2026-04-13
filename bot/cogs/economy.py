@@ -46,10 +46,12 @@ class EconomyCog(commands.Cog, name="Economy"):
         return int(raw) if raw else DEFAULT_PAYDAY_COOLDOWN_HOURS
 
     # ------------------------------------------------------------------
-    # /balance
+    # Economy command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="balance", description="Check your (or another user's) balance")
+    economy_group = app_commands.Group(name="economy", description="Economy commands")
+
+    @economy_group.command(name="balance", description="Check your (or another user's) balance")
     @app_commands.describe(member="User to check (defaults to yourself)")
     async def balance(self, interaction: discord.Interaction, member: discord.Member | None = None) -> None:
         guild = interaction.guild
@@ -67,7 +69,7 @@ class EconomyCog(commands.Cog, name="Economy"):
     # /payday
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="payday", description="Collect your daily credits")
+    @economy_group.command(name="payday", description="Collect your daily credits")
     async def payday(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         assert guild is not None
@@ -99,7 +101,7 @@ class EconomyCog(commands.Cog, name="Economy"):
     # /transfer
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="transfer", description="Transfer credits to another user")
+    @economy_group.command(name="transfer", description="Transfer credits to another user")
     @app_commands.describe(member="Recipient", amount="Amount to transfer")
     async def transfer(self, interaction: discord.Interaction, member: discord.Member, amount: int) -> None:
         guild = interaction.guild
@@ -124,7 +126,7 @@ class EconomyCog(commands.Cog, name="Economy"):
     # /slots
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="slots", description="Play the slot machine")
+    @economy_group.command(name="slots", description="Play the slot machine")
     @app_commands.describe(bet="Amount to bet")
     async def slots(self, interaction: discord.Interaction, bet: int) -> None:
         guild = interaction.guild
@@ -182,7 +184,7 @@ class EconomyCog(commands.Cog, name="Economy"):
     # /leaderboard
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="leaderboard", description="View the richest members")
+    @economy_group.command(name="leaderboard", description="View the richest members")
     @app_commands.describe(limit="Number of entries (max 25)")
     async def leaderboard(self, interaction: discord.Interaction, limit: int = 10) -> None:
         guild = interaction.guild

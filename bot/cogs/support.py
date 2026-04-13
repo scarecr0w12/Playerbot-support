@@ -259,12 +259,12 @@ class FeedbackView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 class SupportCog(commands.Cog, name="Support"):
-    """AI-powered assistant with conversation memory, RAG, function calling, and more."""
+    """AI-powered support assistant with RAG, image generation, and conversation management."""
 
     def __init__(
         self,
         bot: commands.Bot,
-        db: "Database",
+        db: Database,
         llm: "LLMService",
         qdrant: QdrantService | None = None,
         mcp_manager: "MCPManager | None" = None,
@@ -280,6 +280,12 @@ class SupportCog(commands.Cog, name="Support"):
         # Context menu: right-click message → "Ask AI about this"
         self._ask_ctx = app_commands.ContextMenu(name="Ask AI", callback=self._ask_context_menu)
         self.bot.tree.add_command(self._ask_ctx)
+
+    # ------------------------------------------------------------------
+    # AI support command group
+    # ------------------------------------------------------------------
+
+    ai_group = app_commands.Group(name="ai", description="AI assistant commands")
 
     async def cog_unload(self) -> None:
         self.bot.tree.remove_command(self._ask_ctx.name, type=self._ask_ctx.type)
@@ -771,7 +777,7 @@ class SupportCog(commands.Cog, name="Support"):
     # SLASH COMMANDS: Chat & Conversation Management
     # ==================================================================
 
-    @app_commands.command(name="chat", description="Chat with the AI assistant")
+    @ai_group.command(name="chat", description="Chat with the AI assistant")
     @app_commands.describe(
         question="Your message to the assistant",
         outputfile="Upload the response as a file with this name",
@@ -800,7 +806,7 @@ class SupportCog(commands.Cog, name="Support"):
             await self._send_result(interaction.followup.send, result, feedback_ctx=fctx)
 
     # Keep /ask as an alias
-    @app_commands.command(name="ask", description="Ask the AI a question (alias for /chat)")
+    @ai_group.command(name="ask", description="Ask the AI a question (alias for /chat)")
     @app_commands.describe(question="Your question or message")
     async def ask(self, interaction: discord.Interaction, question: str) -> None:
         if interaction.guild and not await self._is_enabled(interaction.guild.id):
@@ -822,7 +828,7 @@ class SupportCog(commands.Cog, name="Support"):
         )
         await self._send_result(interaction.followup.send, result)
 
-    @app_commands.command(name="convostats", description="View token/message stats for your conversation")
+    @ai_group.command(name="convostats", description="View token/message stats for your conversation")
     @app_commands.describe(user="User to check (default: yourself)")
     @app_commands.guild_only()
     async def convostats(
@@ -840,7 +846,7 @@ class SupportCog(commands.Cog, name="Support"):
         em.add_field(name="Total completion tokens", value=str(usage["completion_tokens"]))
         await interaction.response.send_message(embed=em, ephemeral=True)
 
-    @app_commands.command(name="convoclear", description="Reset your conversation in this channel")
+    @ai_group.command(name="convoclear", description="Reset your conversation in this channel")
     @app_commands.guild_only()
     async def convoclear(self, interaction: discord.Interaction) -> None:
         deleted = await self.db.clear_conversation_history(
@@ -851,7 +857,7 @@ class SupportCog(commands.Cog, name="Support"):
         )
 
     # Keep /clear as alias
-    @app_commands.command(name="clear", description="Clear your conversation history (alias for /convoclear)")
+    @ai_group.command(name="clear", description="Clear your conversation history (alias for /convoclear)")
     async def clear(self, interaction: discord.Interaction) -> None:
         guild_id = interaction.guild.id if interaction.guild else 0
         channel_id = interaction.channel.id if interaction.channel else 0
@@ -860,7 +866,7 @@ class SupportCog(commands.Cog, name="Support"):
             f"🗑️ Cleared {deleted} message(s).", ephemeral=True
         )
 
-    @app_commands.command(name="convopop", description="Remove the last message from your conversation")
+    @ai_group.command(name="convopop", description="Remove the last message from your conversation")
     @app_commands.guild_only()
     async def convopop(self, interaction: discord.Interaction) -> None:
         removed = await self.db.pop_last_conversation_message(
@@ -869,7 +875,7 @@ class SupportCog(commands.Cog, name="Support"):
         msg = "Removed last message." if removed else "No messages to remove."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="compact", description="Compact your conversation using LLM summarisation")
+    @ai_group.command(name="compact", description="Compact your conversation using LLM summarisation")
     @app_commands.describe(focus="Optional focus phrase to guide the summary")
     @app_commands.guild_only()
     async def compact(self, interaction: discord.Interaction, focus: str | None = None) -> None:
@@ -896,7 +902,7 @@ class SupportCog(commands.Cog, name="Support"):
             f"Summary preview: {summary[:300]}{'…' if len(summary) > 300 else ''}"
         )
 
-    @app_commands.command(name="convoprompt", description="Set a custom system prompt for your conversation")
+    @ai_group.command(name="convoprompt", description="Set a custom system prompt for your conversation")
     @app_commands.describe(prompt="Custom prompt (leave empty to clear)")
     @app_commands.guild_only()
     async def convoprompt(self, interaction: discord.Interaction, prompt: str | None = None) -> None:
@@ -913,7 +919,7 @@ class SupportCog(commands.Cog, name="Support"):
     # /draw — Image generation
     # ==================================================================
 
-    @app_commands.command(name="draw", description="Generate an image with AI")
+    @ai_group.command(name="draw", description="Generate an image with AI")
     @app_commands.describe(
         prompt="What to draw",
         size="Image size",
@@ -963,7 +969,7 @@ class SupportCog(commands.Cog, name="Support"):
     # /tldr — Channel summarisation
     # ==================================================================
 
-    @app_commands.command(name="tldr", description="Summarise recent channel messages")
+    @ai_group.command(name="tldr", description="Summarise recent channel messages")
     @app_commands.describe(
         count="Number of messages to scan (default 50)",
         question="Ask something specific about the conversation",
@@ -1263,7 +1269,7 @@ class SupportCog(commands.Cog, name="Support"):
         else:
             await interaction.followup.send(f"No chunks found for `{url}`.")
 
-    @app_commands.command(name="query", description="Test embedding search — find relevant knowledge")
+    @ai_group.command(name="query", description="Test embedding search — find relevant knowledge")
     @app_commands.describe(query="Search query to test against the knowledge base")
     @app_commands.guild_only()
     async def query(self, interaction: discord.Interaction, query: str) -> None:
@@ -1291,7 +1297,7 @@ class SupportCog(commands.Cog, name="Support"):
     # Custom functions management
     # ==================================================================
 
-    @app_commands.command(name="customfunctions", description="Add a custom function for the AI to call")
+    @ai_group.command(name="customfunctions", description="Add a custom function for the AI to call")
     @app_commands.describe(
         name="Function name (no spaces)",
         description="What this function does",
@@ -1320,7 +1326,7 @@ class SupportCog(commands.Cog, name="Support"):
         else:
             await interaction.response.send_message(f"Function **{name}** already exists.", ephemeral=True)
 
-    @app_commands.command(name="listfunctions", description="List all custom functions")
+    @ai_group.command(name="listfunctions", description="List all custom functions")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.guild_only()
     async def listfunctions(self, interaction: discord.Interaction) -> None:
@@ -1339,7 +1345,7 @@ class SupportCog(commands.Cog, name="Support"):
         )
         await interaction.response.send_message(embed=em, ephemeral=True)
 
-    @app_commands.command(name="togglefunctions", description="Enable or disable custom functions")
+    @ai_group.command(name="togglefunctions", description="Enable or disable custom functions")
     @app_commands.describe(name="Function name to toggle")
     @app_commands.default_permissions(administrator=True)
     @app_commands.guild_only()
@@ -1988,7 +1994,7 @@ class SupportCog(commands.Cog, name="Support"):
     # /help_support — Full command reference
     # ==================================================================
 
-    @app_commands.command(name="help_support", description="Show all bot features and commands")
+    @ai_group.command(name="help_support", description="Show all bot features and commands")
     async def help_support(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(title="🤖 Bot Command Reference", color=discord.Color.blurple())
 

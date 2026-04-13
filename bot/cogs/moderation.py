@@ -96,7 +96,7 @@ class ModLogPaginator(discord.ui.View):
 
 
 class ModerationCog(commands.Cog, name="Moderation"):
-    """Slash-command moderation suite with case tracking."""
+    """Core moderation commands: warn, mute, kick, ban, etc."""
 
     def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
@@ -107,10 +107,12 @@ class ModerationCog(commands.Cog, name="Moderation"):
         return self.bot.get_cog("ModLogging")  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
-    # /warn
+    # Moderation command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="warn", description="Issue a warning to a member")
+    mod_group = app_commands.Group(name="mod", description="Moderation commands")
+
+    @mod_group.command(name="warn", description="Issue a warning to a member")
     @app_commands.describe(member="The member to warn", reason="Reason for the warning")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def warn(
@@ -200,11 +202,11 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /mute
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="mute", description="Timeout a member")
+    @mod_group.command(name="mute", description="Timeout a member")
     @app_commands.describe(
-        member="The member to mute",
-        duration_minutes="Duration in minutes (default from config)",
-        reason="Reason for the mute",
+        member="The member to timeout",
+        duration="Timeout duration (e.g., 10m, 1h, 1d)",
+        reason="Reason for the timeout"
     )
     @app_commands.checks.has_permissions(moderate_members=True)
     async def mute(
@@ -252,7 +254,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /unmute
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="unmute", description="Remove timeout from a member")
+    @mod_group.command(name="unmute", description="Remove timeout from a member")
     @app_commands.describe(member="The member to unmute", reason="Reason")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def unmute(
@@ -283,7 +285,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /kick
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="kick", description="Kick a member from the server")
+    @mod_group.command(name="kick", description="Kick a member from the server")
     @app_commands.describe(member="The member to kick", reason="Reason for the kick")
     @app_commands.checks.has_permissions(kick_members=True)
     async def kick(
@@ -319,7 +321,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /ban
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="ban", description="Ban a member from the server")
+    @mod_group.command(name="ban", description="Ban a member from the server")
     @app_commands.describe(member="The member to ban", reason="Reason for the ban")
     @app_commands.checks.has_permissions(ban_members=True)
     async def ban(
@@ -355,7 +357,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /unban
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="unban", description="Unban a user by ID")
+    @mod_group.command(name="unban", description="Unban a user by ID")
     @app_commands.describe(user_id="The ID of the user to unban", reason="Reason")
     @app_commands.checks.has_permissions(ban_members=True)
     async def unban(
@@ -390,7 +392,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /warnings
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="warnings", description="View active warnings for a member")
+    @mod_group.command(name="warnings", description="View active warnings for a member")
     @app_commands.describe(member="The member to check")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def warnings(self, interaction: discord.Interaction, member: discord.Member) -> None:
@@ -419,7 +421,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /clearwarnings
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="clearwarnings", description="Clear all active warnings for a member")
+    @mod_group.command(name="clearwarnings", description="Clear all active warnings for a member")
     @app_commands.describe(member="The member whose warnings to clear")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member) -> None:
@@ -434,7 +436,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /modlog  –  paginated case viewer
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="modlog", description="View recent moderation cases (paginated)")
+    @mod_group.command(name="modlog", description="View recent moderation cases (paginated)")
     @app_commands.describe(member="Filter by member (optional)", page="Page number to start on")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def modlog(
@@ -491,7 +493,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /case  –  view a single case
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="case", description="View a single moderation case by ID")
+    @mod_group.command(name="case", description="View a single moderation case by ID")
     @app_commands.describe(case_id="The case number to look up")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def case(self, interaction: discord.Interaction, case_id: int) -> None:
@@ -520,7 +522,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /editcase  –  edit a case reason
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="editcase", description="Edit the reason for a moderation case")
+    @mod_group.command(name="editcase", description="Edit the reason for a moderation case")
     @app_commands.describe(case_id="The case ID to edit", reason="New reason text")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def editcase(self, interaction: discord.Interaction, case_id: int, reason: str) -> None:
@@ -545,7 +547,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /delwarn  –  remove a specific warning by ID
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="delwarn", description="Remove a specific warning by its ID")
+    @mod_group.command(name="delwarn", description="Remove a specific warning by its ID")
     @app_commands.describe(warning_id="The warning ID to remove")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def delwarn(self, interaction: discord.Interaction, warning_id: int) -> None:
@@ -565,7 +567,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /note  –  add a private staff note on a user
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="note", description="Add a private staff note on a user")
+    @mod_group.command(name="note", description="Add a private staff note on a user")
     @app_commands.describe(member="The member to note", note="Note content (staff-only)")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def note(self, interaction: discord.Interaction, member: discord.Member, note: str) -> None:
@@ -588,7 +590,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /notes  –  view staff notes for a user
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="notes", description="View staff notes for a user")
+    @mod_group.command(name="notes", description="View staff notes for a user")
     @app_commands.describe(member="The member to look up")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def notes(self, interaction: discord.Interaction, member: discord.Member) -> None:
@@ -616,7 +618,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /delnote  –  delete a staff note
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="delnote", description="Delete a staff note by ID")
+    @mod_group.command(name="delnote", description="Delete a staff note by ID")
     @app_commands.describe(note_id="The note ID to delete")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def delnote(self, interaction: discord.Interaction, note_id: int) -> None:
@@ -632,7 +634,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /softban  –  ban + immediate unban (removes recent messages)
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="softban", description="Softban a member (ban then unban to clear messages)")
+    @mod_group.command(name="softban", description="Softban a member (ban then unban to clear messages)")
     @app_commands.describe(
         member="The member to softban",
         delete_message_days="Days of messages to delete (1–7)",
@@ -680,7 +682,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /tempban  –  ban with auto-unban after a duration
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="tempban", description="Temporarily ban a member for a set duration")
+    @mod_group.command(name="tempban", description="Temporarily ban a member for a set duration")
     @app_commands.describe(
         member="The member to ban",
         duration_hours="Duration in hours",
@@ -741,7 +743,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /massban  –  ban multiple users by ID
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="massban", description="Ban multiple users by their IDs (space-separated)")
+    @mod_group.command(name="massban", description="Ban multiple users by their IDs (space-separated)")
     @app_commands.describe(
         user_ids="Space-separated list of user IDs",
         reason="Reason for the mass ban",
@@ -786,7 +788,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /slowmode  –  set channel slowmode
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="slowmode", description="Set slowmode for the current or a specified channel")
+    @mod_group.command(name="slowmode", description="Set slowmode for the current or a specified channel")
     @app_commands.describe(
         seconds="Slowmode delay in seconds (0 = disable, max 21600)",
         channel="Channel to apply slowmode to (defaults to current)",
@@ -825,7 +827,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /lock  –  deny @everyone from sending messages in a channel
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="lock", description="Lock a channel — prevent @everyone from sending messages")
+    @mod_group.command(name="lock", description="Lock a channel — prevent @everyone from sending messages")
     @app_commands.describe(
         channel="Channel to lock (defaults to current)",
         reason="Reason",
@@ -873,7 +875,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /unlock  –  restore @everyone send permissions
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="unlock", description="Unlock a channel — restore @everyone send permissions")
+    @mod_group.command(name="unlock", description="Unlock a channel — restore @everyone send permissions")
     @app_commands.describe(
         channel="Channel to unlock (defaults to current)",
         reason="Reason",
@@ -921,7 +923,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /lockdown  –  lock all channels in the server
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="lockdown", description="Lock ALL text channels (server-wide lockdown)")
+    @mod_group.command(name="lockdown", description="Lock ALL text channels (server-wide lockdown)")
     @app_commands.describe(reason="Reason for lockdown")
     @app_commands.checks.has_permissions(administrator=True)
     async def lockdown(
@@ -956,7 +958,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /unlockdown  –  lift server-wide lockdown
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="unlockdown", description="Lift server-wide lockdown (restore all channels)")
+    @mod_group.command(name="unlockdown", description="Lift server-wide lockdown (restore all channels)")
     @app_commands.describe(reason="Reason")
     @app_commands.checks.has_permissions(administrator=True)
     async def unlockdown(
@@ -991,7 +993,7 @@ class ModerationCog(commands.Cog, name="Moderation"):
     # /userhistory  –  full mod summary for a user
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="userhistory", description="Full moderation history and notes for a user")
+    @mod_group.command(name="userhistory", description="Full moderation history and notes for a user")
     @app_commands.describe(member="The member to look up")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def userhistory(self, interaction: discord.Interaction, member: discord.Member) -> None:

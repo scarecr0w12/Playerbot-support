@@ -188,22 +188,21 @@ class ModLoggingCog(commands.Cog, name="ModLogging"):
             logger.error("Failed to send mod-log embed: %s", exc)
 
     # ------------------------------------------------------------------
-    # Slash commands
+    # Mod logging command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="setmodlog", description="Set the channel for mod-log messages")
-    @app_commands.describe(channel="The text channel to send mod-log embeds to")
+    modlog_group = app_commands.Group(name="modlog", description="Moderation logging settings")
+
+    @modlog_group.command(name="setchannel", description="Set the channel for mod-log messages")
+    @app_commands.describe(channel="Channel to send mod-log messages to")
     @app_commands.checks.has_permissions(administrator=True)
-    async def set_mod_log(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    async def setmodlog(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         await self.db.set_guild_config(interaction.guild_id, "mod_log_channel", str(channel.id))  # type: ignore[arg-type]
-        # Seed invite cache for this guild
-        assert interaction.guild is not None
-        await self._seed_invites(interaction.guild)
         await interaction.response.send_message(
             f"✅ Mod-log channel set to {channel.mention}.", ephemeral=True
         )
 
-    @app_commands.command(name="modlogtest", description="Send a test embed to the mod-log channel")
+    @modlog_group.command(name="test", description="Send a test embed to the mod-log channel")
     @app_commands.checks.has_permissions(administrator=True)
     async def modlogtest(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None

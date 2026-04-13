@@ -33,16 +33,18 @@ EIGHT_BALL_RESPONSES = [
 
 
 class UtilityCog(commands.Cog, name="Utility"):
-    """General-purpose informational and fun commands."""
+    """General utility commands: user info, server info, fun commands, etc."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
     # ------------------------------------------------------------------
-    # /userinfo
+    # Utility command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="userinfo", description="Show information about a user")
+    utility_group = app_commands.Group(name="util", description="Utility commands")
+
+    @utility_group.command(name="userinfo", description="Show information about a user")
     @app_commands.describe(member="The user to look up (defaults to yourself)")
     async def userinfo(self, interaction: discord.Interaction, member: discord.Member | None = None) -> None:
         target = member or interaction.user
@@ -82,7 +84,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /serverinfo
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="serverinfo", description="Show information about this server")
+    @utility_group.command(name="serverinfo", description="Show information about this server")
     async def serverinfo(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         assert guild is not None
@@ -111,7 +113,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /avatar
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="avatar", description="Show a user's avatar")
+    @utility_group.command(name="avatar", description="Show a user's avatar")
     @app_commands.describe(member="The user whose avatar to show")
     async def avatar(self, interaction: discord.Interaction, member: discord.Member | None = None) -> None:
         target = member or interaction.user
@@ -123,7 +125,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /poll
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="poll", description="Create a simple yes/no/maybe poll")
+    @utility_group.command(name="poll", description="Create a simple yes/no/maybe poll")
     @app_commands.describe(question="The poll question")
     async def poll(self, interaction: discord.Interaction, question: str) -> None:
         embed = discord.Embed(
@@ -141,7 +143,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /8ball
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="8ball", description="Ask the magic 8-ball a question")
+    @utility_group.command(name="8ball", description="Ask the magic 8-ball a question")
     @app_commands.describe(question="Your yes/no question")
     async def eight_ball(self, interaction: discord.Interaction, question: str) -> None:
         answer = random.choice(EIGHT_BALL_RESPONSES)
@@ -154,7 +156,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /coinflip
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="coinflip", description="Flip a coin")
+    @utility_group.command(name="coinflip", description="Flip a coin")
     async def coinflip(self, interaction: discord.Interaction) -> None:
         result = random.choice(["🪙 **Heads!**", "🪙 **Tails!**"])
         await interaction.response.send_message(result)
@@ -163,7 +165,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /roll
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="roll", description="Roll a random number")
+    @utility_group.command(name="roll", description="Roll a random number")
     @app_commands.describe(maximum="Maximum value (default 100)")
     async def roll(self, interaction: discord.Interaction, maximum: int = 100) -> None:
         result = random.randint(1, max(maximum, 1))
@@ -173,7 +175,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /choose
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="choose", description="Let the bot choose between options")
+    @utility_group.command(name="choose", description="Let the bot choose between options")
     @app_commands.describe(options="Comma-separated options")
     async def choose(self, interaction: discord.Interaction, options: str) -> None:
         choices = [c.strip() for c in options.split(",") if c.strip()]
@@ -187,7 +189,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /ping
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="ping", description="Check the bot's latency")
+    @utility_group.command(name="ping", description="Check the bot's latency")
     async def ping(self, interaction: discord.Interaction) -> None:
         latency_ms = round(self.bot.latency * 1000)
         await interaction.response.send_message(f"🏓 Pong! Latency: **{latency_ms}ms**")
@@ -196,7 +198,7 @@ class UtilityCog(commands.Cog, name="Utility"):
     # /botinfo
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="botinfo", description="Show information about the bot")
+    @utility_group.command(name="botinfo", description="Show information about the bot")
     async def botinfo(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(title="Bot Info", color=discord.Color.blurple())
         embed.add_field(name="Servers", value=str(len(self.bot.guilds)), inline=True)

@@ -297,10 +297,7 @@ class ReactionRolesCog(commands.Cog, name="Reaction Roles"):
     # /reaction_role remove
     # ------------------------------------------------------------------
 
-    @app_commands.command(
-        name="reaction_role_remove",
-        description="Remove a reaction role from a message"
-    )
+    @reaction_group.command(name="remove", description="Remove a reaction role from a message")
     @app_commands.describe(
         message="Message to remove reaction role from",
         emoji="Emoji to remove"
@@ -369,10 +366,7 @@ class ReactionRolesCog(commands.Cog, name="Reaction Roles"):
     # /reaction_role clear
     # ------------------------------------------------------------------
 
-    @app_commands.command(
-        name="reaction_role_clear",
-        description="Remove all reaction roles from a message"
-    )
+    @reaction_group.command(name="clear", description="Remove all reaction roles from a message")
     @app_commands.describe(
         message="Message to clear all reaction roles from"
     )
@@ -429,10 +423,7 @@ class ReactionRolesCog(commands.Cog, name="Reaction Roles"):
     # /reaction_role list
     # ------------------------------------------------------------------
 
-    @app_commands.command(
-        name="reaction_role_list",
-        description="List all reaction roles in the server"
-    )
+    @reaction_group.command(name="list", description="List all reaction roles in the server")
     @app_commands.checks.has_permissions(manage_roles=True)
     async def list_reaction_roles(self, interaction: discord.Interaction) -> None:
         """List all reaction roles in the server."""

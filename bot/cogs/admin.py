@@ -111,20 +111,83 @@ class SelfRoleSelectView(discord.ui.View):
 
 
 class AdminCog(commands.Cog, name="Admin"):
-    """Server administration: roles, nicknames, announcements, self-roles."""
+    """Administrative utilities: nick changes, announcements, config view."""
 
     def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
         self.db = db
 
-    async def cog_load(self) -> None:
-        self.bot.add_view(SelfRoleView(self))
+    # ------------------------------------------------------------------
+    # Admin command group
+    # ------------------------------------------------------------------
+
+    admin_group = app_commands.Group(name="admin", description="Administrative utilities")
+
+    @admin_group.command(name="nick", description="Change a member's nickname")
+    @app_commands.describe(member="Target member", nickname="New nickname (leave empty to reset)")
+    @app_commands.checks.has_permissions(manage_nicknames=True)
+    async def nick(
+        self, interaction: discord.Interaction, member: discord.Member, nickname: str | None = None
+    ) -> None:
+        try:
+            await member.edit(nick=nickname, reason=f"Changed by {interaction.user}")
+            if nickname:
+                await interaction.response.send_message(
+                    f"✅ {member.mention}'s nickname set to **{nickname}**.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"✅ {member.mention}'s nickname has been reset.", ephemeral=True
+                )
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I can't change that member's nickname.", ephemeral=True)
+
+    @admin_group.command(name="announce", description="Send an announcement embed to a channel")
+    @app_commands.describe(
+        channel="Target channel",
+        title="Announcement title",
+        message="Announcement body",
+    )
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def announce(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        title: str,
+        message: str,
+    ) -> None:
+        embed = discord.Embed(
+            title=title,
+            description=message,
+            color=discord.Color.gold(),
+        )
+        embed.set_footer(text=f"Announced by {interaction.user}")
+        await channel.send(embed=embed)
+        await interaction.response.send_message(
+            f"✅ Announcement posted in {channel.mention}.", ephemeral=True
+        )
+
+    @admin_group.command(name="serverconfig", description="View current bot configuration for this server")
+    @app_commands.checks.has_permissions(manage_guild=True)
+    async def serverconfig(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        assert guild is not None
+        keys = [
+            "mod_log_channel", "ticket_category", "welcome_channel",
+            "welcome_message", "autorole", "verified_role", "automod_enabled",
+            "payday_amount", "payday_cooldown_hours",
+        ]
+        embed = discord.Embed(title=f"Bot Config — {guild.name}", color=discord.Color.blurple())
+        for key in keys:
+            val = await self.db.get_guild_config(guild.id, key)
+            embed.add_field(name=key, value=f"`{val}`" if val else "*not set*", inline=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
     # Role management
     # ------------------------------------------------------------------
 
-    role_group = app_commands.Group(name="role", description="Role management commands")
+    role_group = app_commands.Group(name="role", description="Role management commands", parent=admin_group)
 
     @role_group.command(name="add", description="Add a role to a member")
     @app_commands.describe(member="Target member", role="Role to add")

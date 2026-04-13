@@ -58,21 +58,19 @@ class CleanupCog(commands.Cog, name="Cleanup"):
             )
 
     # ------------------------------------------------------------------
-    # /purge — delete N messages
+    # Cleanup command group
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="purge", description="Delete a number of messages from this channel")
+    cleanup_group = app_commands.Group(name="cleanup", description="Message cleanup commands")
+
+    @cleanup_group.command(name="purge", description="Delete a number of messages from this channel")
     @app_commands.describe(count="Number of messages to delete (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge(self, interaction: discord.Interaction, count: int) -> None:
         count = min(max(count, 1), 100)
         await self._do_purge(interaction, count, description=f"(last {count})")
 
-    # ------------------------------------------------------------------
-    # /purge_user — delete messages from a specific user
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="purge_user", description="Delete recent messages from a specific user")
+    @cleanup_group.command(name="purge_user", description="Delete recent messages from a specific user")
     @app_commands.describe(member="Target user", count="Number of messages to scan (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge_user(self, interaction: discord.Interaction, member: discord.Member, count: int = 100) -> None:
@@ -83,11 +81,7 @@ class CleanupCog(commands.Cog, name="Cleanup"):
             description=f"(from {member})",
         )
 
-    # ------------------------------------------------------------------
-    # /purge_bots — delete messages from bots
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="purge_bots", description="Delete recent bot messages")
+    @cleanup_group.command(name="purge_bots", description="Delete recent bot messages")
     @app_commands.describe(count="Number of messages to scan (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge_bots(self, interaction: discord.Interaction, count: int = 100) -> None:
@@ -102,7 +96,7 @@ class CleanupCog(commands.Cog, name="Cleanup"):
     # /purge_contains — delete messages containing specific text
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="purge_contains", description="Delete messages containing specific text")
+    @cleanup_group.command(name="purge_contains", description="Delete messages containing specific text")
     @app_commands.describe(text="Text to search for", count="Number of messages to scan (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge_contains(self, interaction: discord.Interaction, text: str, count: int = 100) -> None:
@@ -118,7 +112,7 @@ class CleanupCog(commands.Cog, name="Cleanup"):
     # /purge_embeds — delete messages with embeds/attachments
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="purge_embeds", description="Delete messages with embeds or attachments")
+    @cleanup_group.command(name="purge_embeds", description="Delete messages with embeds or attachments")
     @app_commands.describe(count="Number of messages to scan (max 100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge_embeds(self, interaction: discord.Interaction, count: int = 100) -> None:
