@@ -206,9 +206,7 @@ class ReactionRolesCog(commands.Cog, name="Reaction Roles"):
                 ephemeral=True,
             )
 
-    reaction_role_group = reaction_group.group(name="reaction_role", description="Manage reaction roles on a message")
-
-    @reaction_role_group.command(name="add", description="Add a reaction role to an existing message")
+    @reaction_group.command(name="add", description="Add a reaction role to an existing message")
     @app_commands.describe(
         message="Message to add reaction role to (right-click > Copy Message Link)",
         emoji="Emoji to use for the role",

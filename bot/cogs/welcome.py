@@ -88,6 +88,12 @@ class WelcomeCog(commands.Cog, name="Welcome"):
     # Configuration commands
     # ------------------------------------------------------------------
 
+    @app_commands.command(name="set_welcome_channel", description="Set the welcome channel")
+    @app_commands.describe(channel="Channel to send welcome messages in")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_welcome_channel(
+        self, interaction: discord.Interaction, channel: discord.TextChannel
+    ) -> None:
         await self.db.set_guild_config(interaction.guild_id, "welcome_channel", str(channel.id))  # type: ignore[arg-type]
         await interaction.response.send_message(
             f"✅ Welcome channel set to {channel.mention}.", ephemeral=True
