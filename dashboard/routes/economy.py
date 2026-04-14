@@ -316,6 +316,10 @@ def init(templates: Jinja2Templates) -> APIRouter:
             async with aiosqlite.connect(DB_PATH) as _db:
                 _db.row_factory = aiosqlite.Row
                 start_dt = datetime.now(timezone.utc)
+                logger.info(
+                    "giveaways_create inserting: guild_id=%s channel_id=%s prize=%s start_time=%s end_time=%s winner_count=%s host_id=%s",
+                    guild_id, channel_id, prize, start_dt.isoformat(), end_dt.isoformat(), winner_count, host_id
+                )
                 cur = await _db.execute(
                     "INSERT INTO giveaways (guild_id, channel_id, prize, start_time, end_time, winner_count, host_id) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -323,6 +327,11 @@ def init(templates: Jinja2Templates) -> APIRouter:
                 )
                 await _db.commit()
                 giveaway_id = cur.lastrowid
+                logger.info("giveaways_create inserted: giveaway_id=%s", giveaway_id)
+                # Verify what was actually stored
+                verify = await _db.execute("SELECT * FROM giveaways WHERE id = ?", (giveaway_id,))
+                row = await verify.fetchone()
+                logger.info("giveaways_create verify row: %s", dict(row))
         except Exception as exc:
             logger.exception("Failed to create giveaway: %s", exc)
             request.session["flash_error"] = f"Error creating giveaway: {exc}"
