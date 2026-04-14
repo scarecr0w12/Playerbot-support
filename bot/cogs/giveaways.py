@@ -112,6 +112,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         self.bot = bot
         self.db = db
         self._active_views: dict[int, GiveawayEntryView] = {}
+        self._handling: set[int] = set()
 
     async def cog_load(self) -> None:
         await self._restore_active_views()
@@ -128,9 +129,18 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
             giveaway_id = int(custom_id.split(":")[2])
         except (IndexError, ValueError):
             return
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-        await self.handle_entry(interaction, giveaway_id)
+        if interaction.id in self._handling:
+            return
+        self._handling.add(interaction.id)
+        try:
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.defer(ephemeral=True)
+                except discord.HTTPException:
+                    return
+            await self.handle_entry(interaction, giveaway_id)
+        finally:
+            self._handling.discard(interaction.id)
 
     async def cog_unload(self) -> None:
         self._giveaway_loop.cancel()
