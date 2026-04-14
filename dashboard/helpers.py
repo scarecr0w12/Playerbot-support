@@ -54,6 +54,7 @@ GUILD_ID_QUERIES = [
     "SELECT DISTINCT guild_id FROM command_permissions WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM levels WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM giveaways WHERE guild_id IS NOT NULL",
+    "SELECT DISTINCT guild_id FROM polls WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM reminders WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM starboard_messages WHERE guild_id IS NOT NULL",
     "SELECT DISTINCT guild_id FROM highlights WHERE guild_id IS NOT NULL",

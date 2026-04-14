@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Polls — Bot Dashboard{% endblock %}
+{% block header %}Polls{% endblock %}
+
+{% block content %}
+{% if flash_error %}
+<div class="mb-4 flex items-start gap-3 px-4 py-3 rounded-lg border border-red-500/30 bg-red-950/40 text-red-300 text-sm">
+  <i class="fa fa-circle-exclamation mt-0.5 flex-shrink-0"></i>
+  <span>{{ flash_error }}</span>
+</div>
+{% endif %}
+{% if flash_ok %}
+<div class="mb-4 flex items-start gap-3 px-4 py-3 rounded-lg border border-green-500/30 bg-green-950/40 text-green-300 text-sm">
+  <i class="fa fa-circle-check mt-0.5 flex-shrink-0"></i>
+  <span>{{ flash_ok }}</span>
+</div>
+{% endif %}
+
+<div class="mb-4 text-sm text-slate-400 max-w-3xl">
+  Polls are created in Discord with <span class="font-mono text-slate-300">/poll create</span>.
+  Use this page to review stored polls, end them with a final results embed (same as <span class="font-mono text-slate-300">/poll end</span>), strip broken buttons, or delete orphaned database rows.
+  {% if not discord_configured %}
+  <span class="block mt-2 text-amber-300/90"><i class="fa fa-triangle-exclamation mr-1"></i>Discord bot token is not set — ending polls cannot update Discord messages.</span>
+  {% endif %}
+</div>
+
+<div class="flex flex-col xl:flex-row gap-6">
+  <div class="w-full xl:w-72 flex-shrink-0 space-y-4">
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Select Guild</h3>
+      <div class="space-y-1">
+        {% for g in guilds %}
+        <a href="/polls?guild_id={{ g.guild_id }}&status={{ poll_status }}"
+           class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors {% if guild_id == g.guild_id %}bg-[#5865F2]/20 text-white border border-[#5865F2]/30{% else %}text-gray-400 hover:bg-gray-800 hover:text-white{% endif %}"
+           style="text-decoration:none;">
+          <i class="fa fa-server text-xs"></i>
+          <span class="font-mono">{{ g.guild_id }}</span>
+        </a>
+        {% else %}
+        <p class="text-gray-500 text-xs text-center py-4">No guilds found</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% if guild_id %}
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-3">Filter</h3>
+      <form method="get" action="/polls" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <div>
+          <label class="text-xs text-gray-500 mb-1 block">Show</label>
+          <select name="status" class="input w-full">
+            <option value="active" {% if poll_status == 'active' %}selected{% endif %}>Open (not past deadline)</option>
+            <option value="past_deadline" {% if poll_status == 'past_deadline' %}selected{% endif %}>Past deadline (still in DB)</option>
+            <option value="all" {% if poll_status == 'all' %}selected{% endif %}>All stored polls</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-primary w-full text-sm"><i class="fa fa-filter mr-1"></i> Apply</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="flex-1 min-w-0">
+    <div class="card overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 gap-2">
+        <h2 class="font-semibold text-white min-w-0 truncate">
+          {% if guild_id %}Polls — <span class="font-mono text-[#5865F2]">{{ guild_id }}</span>{% else %}Polls{% endif %}
+        </h2>
+        <span class="text-xs text-gray-500 flex-shrink-0">{{ polls|length }} shown</span>
+      </div>
+      <div class="table-scroll">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-gray-500 text-xs border-b border-gray-800">
+              <th class="px-4 py-3 font-medium">Question</th>
+              <th class="px-4 py-3 font-medium">Channel</th>
+              <th class="px-4 py-3 font-medium">Message</th>
+              <th class="px-4 py-3 font-medium">Votes</th>
+              <th class="px-4 py-3 font-medium">Ends</th>
+              <th class="px-4 py-3 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in polls %}
+            <tr class="table-row align-top">
+              <td class="px-4 py-3 text-gray-200 max-w-xs">
+                <div class="font-medium truncate" title="{{ p.question }}">{{ p.question }}</div>
+                <div class="text-xs text-gray-500 mt-1">
+                  {% if p.multiple_choice %}<span class="mr-2">Multi</span>{% endif %}
+                  {% if p.anonymous %}<span>Anonymous</span>{% endif %}
+                </div>
+              </td>
+              <td class="px-4 py-3 text-gray-400 font-mono text-xs">{{ p.channel_id }}</td>
+              <td class="px-4 py-3">
+                <a href="https://discord.com/channels/{{ guild_id }}/{{ p.channel_id }}/{{ p.message_id }}"
+                   target="_blank" rel="noopener noreferrer"
+                   class="text-[#5865F2] hover:underline text-xs font-mono">Open</a>
+              </td>
+              <td class="px-4 py-3 text-gray-400 text-xs">{{ vote_totals.get(p.id, 0) }}</td>
+              <td class="px-4 py-3 text-gray-400 text-xs whitespace-nowrap">{{ p.ends_at[:16] if p.ends_at else "—" }}</td>
+              <td class="px-4 py-3 space-y-2">
+                <form method="post" action="/polls/end" onsubmit="return confirm('End this poll? The message will show final results and the poll will be removed from the database.')">
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <input type="hidden" name="message_id" value="{{ p.message_id }}"/>
+                  <input type="hidden" name="poll_status" value="{{ poll_status }}"/>
+                  <button type="submit" class="btn-primary text-xs w-full" {% if not discord_configured %}disabled title="Bot token required"{% endif %}>End &amp; results</button>
+                </form>
+                <form method="post" action="/polls/clear-components" onsubmit="return confirm('Remove voting buttons from the Discord message only? The poll stays in the database.')">
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <input type="hidden" name="message_id" value="{{ p.message_id }}"/>
+                  <input type="hidden" name="poll_status" value="{{ poll_status }}"/>
+                  <button type="submit" class="btn-secondary text-xs w-full" {% if not discord_configured %}disabled{% endif %}>Strip buttons</button>
+                </form>
+                <form method="post" action="/polls/delete" onsubmit="return confirm('Delete this poll from the database only? Discord message is unchanged.')">
+                  <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+                  <input type="hidden" name="message_id" value="{{ p.message_id }}"/>
+                  <input type="hidden" name="poll_status" value="{{ poll_status }}"/>
+                  <button type="submit" class="btn-danger text-xs w-full"><i class="fa fa-trash"></i> DB only</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="px-4 py-10 text-center text-gray-500">
+                No polls{% if not guild_id %} — select a guild{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

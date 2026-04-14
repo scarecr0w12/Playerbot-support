@@ -36,6 +36,9 @@ def init(templates: Jinja2Templates) -> APIRouter:
         active_warnings = await count_scoped_rows("warnings", guild_ids, "active = 1")
         open_reports = await count_scoped_rows("reports", guild_ids, "status = 'open'")
         active_giveaways = await count_scoped_rows("giveaways", guild_ids, "status = 'active'")
+        active_polls = await count_scoped_rows(
+            "polls", guild_ids, "(ends_at IS NULL OR ends_at > datetime('now'))"
+        )
         economy_accounts = await count_scoped_rows("economy_accounts", guild_ids)
         level_entries = await count_scoped_rows("levels", guild_ids)
         custom_commands = await count_scoped_rows("custom_commands", guild_ids)
@@ -56,6 +59,7 @@ def init(templates: Jinja2Templates) -> APIRouter:
             "guild_count": len(guilds),
             "open_reports": open_reports,
             "active_giveaways": active_giveaways,
+            "active_polls": active_polls,
             "economy_accounts": economy_accounts,
             "level_entries": level_entries,
             "custom_commands": custom_commands,
@@ -80,6 +84,9 @@ def init(templates: Jinja2Templates) -> APIRouter:
             "active_warnings": await count_scoped_rows("warnings", guild_ids, "active = 1"),
             "open_reports": await count_scoped_rows("reports", guild_ids, "status = 'open'"),
             "active_giveaways": await count_scoped_rows("giveaways", guild_ids, "status = 'active'"),
+            "active_polls": await count_scoped_rows(
+                "polls", guild_ids, "(ends_at IS NULL OR ends_at > datetime('now'))"
+            ),
         }
 
     @router.get("/api/guilds")
