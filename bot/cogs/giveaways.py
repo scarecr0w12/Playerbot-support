@@ -159,12 +159,14 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
             _db.row_factory = aiosqlite.Row
             cur = await _db.execute("SELECT * FROM giveaways WHERE status = 'active'")
             rows = await cur.fetchall()
+        logger.info("_giveaway_loop tick: now=%s active_rows=%d", now.isoformat(), len(rows))
         for row in rows:
             try:
                 end_time = datetime.fromisoformat(row["end_time"])
                 if end_time.tzinfo is None:
                     end_time = end_time.replace(tzinfo=timezone.utc)
             except (TypeError, ValueError):
+                logger.warning("giveaway id=%s bad end_time=%r, skipping", row["id"], row["end_time"])
                 continue
             raw_start = row["start_time"]
             if raw_start:
@@ -173,9 +175,11 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
                     if start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=timezone.utc)
                     if start_time > now:
+                        logger.info("giveaway id=%s start_time=%s > now, skipping", row["id"], start_time.isoformat())
                         continue
                 except (TypeError, ValueError):
                     pass
+            logger.info("giveaway id=%s end_time=%s <= now=%s? %s", row["id"], end_time.isoformat(), now.isoformat(), end_time <= now)
             if end_time <= now:
                 await self._end_giveaway(row["id"])
 
@@ -221,6 +225,13 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         if not row or row["status"] != "active":
             return []
 
+        logger.info(
+            "_end_giveaway called: id=%s end_time=%s start_time=%s now=%s",
+            giveaway_id,
+            row["end_time"],
+            row["start_time"] if "start_time" in row.keys() else "N/A",
+            datetime.now(timezone.utc).isoformat(),
+        )
         await self.db.end_giveaway(giveaway_id)
 
         entries = await self.db.get_giveaway_entries(giveaway_id)
