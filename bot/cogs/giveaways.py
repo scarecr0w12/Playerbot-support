@@ -136,9 +136,13 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         try:
             if not interaction.response.is_done():
                 try:
+                    logger.info("deferring interaction %s", interaction.id)
                     await interaction.response.defer(ephemeral=True)
-                except discord.HTTPException:
+                    logger.info("defer succeeded")
+                except discord.HTTPException as e:
+                    logger.warning("defer failed: %s", e)
                     return
+            logger.info("calling handle_entry")
             await self.handle_entry(interaction, giveaway_id)
         finally:
             self._handling.discard(interaction.id)
@@ -193,16 +197,23 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
     # ------------------------------------------------------------------
 
     async def handle_entry(self, interaction: discord.Interaction, giveaway_id: int) -> None:
+        logger.info("handle_entry: giveaway_id=%s user_id=%s", giveaway_id, interaction.user.id)
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
         row = await self.db.get_giveaway(giveaway_id)
-        if not row or row["status"] != "active":
+        if not row:
+            logger.warning("handle_entry: giveaway %s not found", giveaway_id)
+            await interaction.followup.send("❌ Giveaway not found.", ephemeral=True)
+            return
+        if row["status"] != "active":
+            logger.warning("handle_entry: giveaway %s not active (status=%s)", giveaway_id, row["status"])
             await interaction.followup.send("❌ This giveaway has ended.", ephemeral=True)
             return
 
         entered = await self.db.enter_giveaway(giveaway_id, interaction.user.id)
         count = await self.db.get_giveaway_entry_count(giveaway_id)
+        logger.info("handle_entry: entered=%s count=%s", entered, count)
 
         if entered:
             await interaction.followup.send(
@@ -286,11 +297,14 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         return winners
 
     async def _update_embed(self, row, count: int) -> None:
+        logger.info("_update_embed: giveaway_id=%s count=%s", row["id"], count)
         guild = self.bot.get_guild(row["guild_id"])
         if not guild or not row["message_id"]:
+            logger.warning("_update_embed: no guild or message_id for giveaway %s", row["id"])
             return
         channel = guild.get_channel(row["channel_id"])
         if not isinstance(channel, discord.TextChannel):
+            logger.warning("_update_embed: channel not found or not text channel for giveaway %s", row["id"])
             return
         try:
             msg = await channel.fetch_message(row["message_id"])
@@ -304,8 +318,9 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
                 entry_count=count,
             )
             await msg.edit(embed=em)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
+            logger.info("_update_embed: successfully updated embed for giveaway %s", row["id"])
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
+            logger.warning("_update_embed: failed to update embed for giveaway %s: %s", row["id"], e)
 
     # ==================================================================
     # Slash commands
