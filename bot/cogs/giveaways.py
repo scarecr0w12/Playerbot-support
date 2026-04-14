@@ -33,6 +33,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+def _giveaway_component_message_id(interaction: discord.Interaction) -> int | None:
+    """Message id for component interactions (discord.py versions differ on Interaction.message_id)."""
+    msg = interaction.message
+    if msg is not None:
+        return msg.id
+    return getattr(interaction, "message_id", None)
+
+
 _DURATION_RE = re.compile(
     r"(?:(\d+)\s*d(?:ays?)?)?"
     r"(?:(\d+)\s*h(?:ours?)?)?"
@@ -135,8 +143,11 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         custom_id = (interaction.data or {}).get("custom_id", "")
         if not custom_id.startswith("giveaway:enter:"):
             return
-        mid = interaction.message_id
-        if mid and mid in self._giveaway_registered_messages:
+        # Persistent View was scheduled for this click; never await here or we race its defer.
+        mid = _giveaway_component_message_id(interaction)
+        if mid is not None and mid in self._giveaway_registered_messages:
+            return
+        if interaction.response.is_done():
             return
         try:
             giveaway_id = int(custom_id.split(":")[2])
