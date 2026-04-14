@@ -123,6 +123,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         if interaction.type != discord.InteractionType.component:
             return
         custom_id = (interaction.data or {}).get("custom_id", "")
+        logger.info("on_interaction component: custom_id=%s", custom_id)
         if not custom_id.startswith("giveaway:enter:"):
             return
         try:
