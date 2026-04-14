@@ -1,7 +1,7 @@
 ---
 name: playerbot-cog-engineer
 description: >-
-  Implements or fixes discord.py 2.x cogs for Playerbot-support: slash commands,
+  Implements or fixes discord.py 2.7+ cogs for Playerbot-support: slash commands,
   views, permissions interaction_check compatibility, ModLogging hooks, and
   SQLite guild_config usage. Use proactively after editing bot/cogs/ or main.py
   cog registration.

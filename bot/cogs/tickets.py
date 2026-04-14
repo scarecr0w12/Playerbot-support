@@ -50,19 +50,29 @@ def _parse_csv_int_ids(raw: str | None) -> list[int]:
 # ======================================================================
 
 class TicketCreateModal(discord.ui.Modal, title="Open a Support Ticket"):
-    """Modal popup that collects ticket subject and description."""
+    """Modal popup that collects ticket subject and description.
 
-    subject = discord.ui.TextInput(
-        label="Subject",
-        placeholder="Brief summary of your issue…",
-        max_length=100,
+    Uses :class:`discord.ui.Label` + :class:`discord.ui.TextInput` (discord.py 2.6+).
+    Bare ``TextInput(..., label=...)`` is deprecated and can produce modal payloads
+    that Discord rejects for some clients.
+    """
+
+    subject_block = discord.ui.Label(
+        text="Subject",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.short,
+            placeholder="Brief summary of your issue...",
+            max_length=100,
+        ),
     )
-    description = discord.ui.TextInput(
-        label="Description",
-        style=discord.TextStyle.paragraph,
-        placeholder="Describe your issue in detail…",
-        required=False,
-        max_length=2000,
+    description_block = discord.ui.Label(
+        text="Description",
+        component=discord.ui.TextInput(
+            style=discord.TextStyle.paragraph,
+            placeholder="Describe your issue in detail...",
+            required=False,
+            max_length=2000,
+        ),
     )
 
     def __init__(self, cog: TicketsCog) -> None:
@@ -70,10 +80,12 @@ class TicketCreateModal(discord.ui.Modal, title="Open a Support Ticket"):
         self.cog = cog
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        subject = self.subject_block.component.value
+        description = self.description_block.component.value
         await self.cog.create_ticket(
             interaction,
-            subject=self.subject.value,
-            description=self.description.value,
+            subject=subject,
+            description=description,
         )
 
 
@@ -228,7 +240,9 @@ class TicketsCog(commands.Cog, name="Tickets"):
                 if role.permissions.manage_messages and not role.is_default():
                     overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-        channel_name = f"ticket-{user.name[:16]}-{user.discriminator or user.id}"
+        # Username-only era: avoid deprecated discriminator; keep names channel-safe (lowercase alnum + hyphen).
+        raw = "".join(c if c.isalnum() or c in "-_" else "-" for c in (user.name or "user").lower())[:20].strip("-") or "user"
+        channel_name = f"ticket-{raw}-{user.id}"[:100]
         channel = await guild.create_text_channel(
             channel_name,
             category=category if isinstance(category, discord.CategoryChannel) else None,

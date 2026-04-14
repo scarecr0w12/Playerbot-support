@@ -4,7 +4,7 @@ trigger: always_on
 
 # Playerbot-support — foundation
 
-- **Stack:** Python 3.10+, `discord.py` 2.x, `aiosqlite`, FastAPI + Jinja2 + uvicorn, OpenAI-compatible SDK, Qdrant, optional MCP (`mcp` package).
+- **Stack:** Python 3.10+, `discord.py` 2.7.1+ (pin in `requirements.txt`), `aiosqlite`, FastAPI + Jinja2 + uvicorn, OpenAI-compatible SDK, Qdrant, optional MCP (`mcp` package).
 - **Entry:** `main.py` wires `Database` → `LLMService` / `QdrantService` / `MCPManager`, loads cogs, starts the dashboard in a **daemon thread** (no hot-reload). Restart after dashboard changes.
 - **Cog order:** `ModLoggingCog` and `PermissionsCog` load **first**; a **global** `bot.tree.interaction_check` delegates to Permissions. Do not reorder without auditing permission and logging side effects.
 - **Commands:** Slash-first; `!` is for **custom commands** (`CustomCommandsCog`) only unless explicitly extending prefix behavior.
