@@ -134,6 +134,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
             return
         self._handling.add(interaction.id)
         try:
+            # Defer immediately to avoid rate limit timeout
             if not interaction.response.is_done():
                 try:
                     logger.info("deferring interaction %s", interaction.id)
@@ -198,8 +199,6 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
 
     async def handle_entry(self, interaction: discord.Interaction, giveaway_id: int) -> None:
         logger.info("handle_entry: giveaway_id=%s user_id=%s", giveaway_id, interaction.user.id)
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
 
         row = await self.db.get_giveaway(giveaway_id)
         if not row:
