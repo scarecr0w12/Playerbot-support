@@ -112,7 +112,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
         self.bot = bot
         self.db = db
         self._active_views: dict[int, GiveawayEntryView] = {}
-        self._handling: set[int] = set()
+        self._handling: set[tuple[int, int]] = set()
 
     async def cog_load(self) -> None:
         await self._restore_active_views()
@@ -130,9 +130,10 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
             giveaway_id = int(custom_id.split(":")[2])
         except (IndexError, ValueError):
             return
-        if interaction.id in self._handling:
+        dedup_key = (giveaway_id, interaction.user.id)
+        if dedup_key in self._handling:
             return
-        self._handling.add(interaction.id)
+        self._handling.add(dedup_key)
         try:
             # Defer immediately to avoid rate limit timeout
             if not interaction.response.is_done():
@@ -146,7 +147,7 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
             logger.info("calling handle_entry")
             await self.handle_entry(interaction, giveaway_id)
         finally:
-            self._handling.discard(interaction.id)
+            self._handling.discard(dedup_key)
 
     async def cog_unload(self) -> None:
         self._giveaway_loop.cancel()
@@ -200,27 +201,53 @@ class GiveawayCog(commands.Cog, name="Giveaways"):
     async def handle_entry(self, interaction: discord.Interaction, giveaway_id: int) -> None:
         logger.info("handle_entry: giveaway_id=%s user_id=%s", giveaway_id, interaction.user.id)
 
-        row = await self.db.get_giveaway(giveaway_id)
-        if not row:
-            logger.warning("handle_entry: giveaway %s not found", giveaway_id)
-            await interaction.followup.send("❌ Giveaway not found.", ephemeral=True)
-            return
-        if row["status"] != "active":
-            logger.warning("handle_entry: giveaway %s not active (status=%s)", giveaway_id, row["status"])
-            await interaction.followup.send("❌ This giveaway has ended.", ephemeral=True)
-            return
+        # Single fresh connection covers status check, INSERT/DELETE, and COUNT
+        # atomically — prevents entries into ended giveaways and stale reads.
+        async with aiosqlite.connect(DB_PATH) as _db:
+            _db.row_factory = aiosqlite.Row
 
-        entered = await self.db.enter_giveaway(giveaway_id, interaction.user.id)
-        count = await self.db.get_giveaway_entry_count(giveaway_id)
-        logger.info("handle_entry: entered=%s count=%s", entered, count)
+            cur = await _db.execute("SELECT * FROM giveaways WHERE id = ?", (giveaway_id,))
+            row = await cur.fetchone()
+            if not row:
+                logger.warning("handle_entry: giveaway %s not found", giveaway_id)
+                await interaction.followup.send("❌ Giveaway not found.", ephemeral=True)
+                return
+            if row["status"] != "active":
+                logger.warning("handle_entry: giveaway %s not active (status=%s)", giveaway_id, row["status"])
+                await interaction.followup.send("❌ This giveaway has ended.", ephemeral=True)
+                return
+
+            logger.info("handle_entry: calling enter_giveaway")
+            try:
+                await _db.execute(
+                    "INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)",
+                    (giveaway_id, interaction.user.id),
+                )
+                await _db.commit()
+                entered = True
+                logger.info("handle_entry: enter_giveaway succeeded")
+            except aiosqlite.IntegrityError:
+                entered = False
+                logger.info("handle_entry: enter_giveaway duplicate entry")
+                await _db.execute(
+                    "DELETE FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?",
+                    (giveaway_id, interaction.user.id),
+                )
+                await _db.commit()
+
+            cur = await _db.execute(
+                "SELECT COUNT(*) FROM giveaway_entries WHERE giveaway_id = ?",
+                (giveaway_id,),
+            )
+            count_row = await cur.fetchone()
+            count = count_row[0] if count_row else 0
+            logger.info("handle_entry: entry_count=%s", count)
 
         if entered:
             await interaction.followup.send(
                 f"✅ You entered the giveaway! **{count}** total entries.", ephemeral=True
             )
         else:
-            await self.db.leave_giveaway(giveaway_id, interaction.user.id)
-            count = await self.db.get_giveaway_entry_count(giveaway_id)
             await interaction.followup.send(
                 f"↩️ You withdrew your entry. **{count}** total entries.", ephemeral=True
             )
