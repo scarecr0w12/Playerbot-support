@@ -17,10 +17,13 @@
 {% endif %}
 
 <div class="mb-4 text-sm text-slate-400 max-w-3xl">
-  Polls are created in Discord with <span class="font-mono text-slate-300">/poll create</span>.
-  Use this page to review stored polls, end them with a final results embed (same as <span class="font-mono text-slate-300">/poll end</span>), strip broken buttons, or delete orphaned database rows.
+  Launch polls from this page or with <span class="font-mono text-slate-300">/poll create</span> in Discord.
+  Ending matches <span class="font-mono text-slate-300">/poll end</span>; you can also strip broken buttons or delete orphaned database rows.
+  {% if guild_id and not bot_wired %}
+  <span class="block mt-2 text-amber-300/90"><i class="fa fa-triangle-exclamation mr-1"></i>Voting buttons are only registered automatically when this dashboard runs alongside the bot via <span class="font-mono">python main.py</span> (not <span class="font-mono">uvicorn dashboard.app:app</span> alone).</span>
+  {% endif %}
   {% if not discord_configured %}
-  <span class="block mt-2 text-amber-300/90"><i class="fa fa-triangle-exclamation mr-1"></i>Discord bot token is not set — ending polls cannot update Discord messages.</span>
+  <span class="block mt-2 text-amber-300/90"><i class="fa fa-triangle-exclamation mr-1"></i>Discord bot token is not set — posting and editing poll messages will fail.</span>
   {% endif %}
 </div>
 
@@ -56,6 +59,59 @@
           </select>
         </div>
         <button type="submit" class="btn-primary w-full text-sm"><i class="fa fa-filter mr-1"></i> Apply</button>
+      </form>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="text-sm font-semibold text-gray-300 mb-4 flex items-center gap-2">
+        <i class="fa fa-square-poll-vertical text-[#5865F2]"></i> New poll
+      </h3>
+      <form method="post" action="/polls/create" class="space-y-3">
+        <input type="hidden" name="guild_id" value="{{ guild_id }}"/>
+        <input type="hidden" name="poll_status" value="{{ poll_status }}"/>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Question <span class="text-red-400">*</span></label>
+          <input type="text" name="question" required maxlength="240" class="input" placeholder="What should we play Friday?"/>
+        </div>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Options <span class="text-red-400">*</span></label>
+          <textarea name="options" required rows="3" class="input" placeholder="Option A, Option B, Option C"></textarea>
+          <p class="text-xs text-gray-600 mt-1">Comma-separated, up to 20.</p>
+        </div>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Duration (hours)</label>
+          <input type="number" name="duration_hours" min="1" max="8760" class="input" placeholder="Leave empty for no limit"/>
+        </div>
+
+        <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+          <input type="checkbox" name="multiple_choice" value="1" class="rounded border-gray-600"/>
+          Multiple choice
+        </label>
+        <label class="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+          <input type="checkbox" name="anonymous" value="1" class="rounded border-gray-600"/>
+          Anonymous
+        </label>
+
+        <div class="field-stack">
+          <label class="text-xs text-gray-400">Channel ID <span class="text-red-400">*</span></label>
+          <div class="flex gap-2">
+            <input type="number" name="channel_id" required class="input" id="pollChannelInput" placeholder="Channel ID"/>
+            <button type="button" data-guild="{{ guild_id }}" onclick="loadPollChannels(this.dataset.guild)"
+                    class="btn-secondary text-xs flex-shrink-0 px-2" title="Load channels">
+              <i class="fa fa-rotate"></i>
+            </button>
+          </div>
+          <select id="pollChannelSelect" class="input hidden mt-2" onchange="document.getElementById('pollChannelInput').value=this.value">
+            <option value="">— pick channel —</option>
+          </select>
+        </div>
+
+        <button type="submit" class="btn-primary w-full text-sm" {% if not discord_configured %}disabled{% endif %}>
+          <i class="fa fa-paper-plane mr-1"></i> Post to Discord
+        </button>
       </form>
     </div>
     {% endif %}
@@ -133,4 +189,27 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadPollChannels(guildId) {
+  const select = document.getElementById('pollChannelSelect');
+  select.innerHTML = '<option value="">Loading…</option>';
+  select.classList.remove('hidden');
+  try {
+    const resp = await fetch(`/api/guild-channels/${guildId}`);
+    const data = await resp.json();
+    select.innerHTML = '<option value="">— pick channel —</option>';
+    (data.channels || []).forEach(ch => {
+      const opt = document.createElement('option');
+      opt.value = ch.id;
+      opt.textContent = `#${ch.name}`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    select.innerHTML = '<option value="">Failed to load</option>';
+  }
+}
+</script>
 {% endblock %}

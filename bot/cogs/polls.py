@@ -175,6 +175,37 @@ class PollsCog(commands.Cog, name="Polls"):
         except Exception:
             logger.exception("Failed to register persistent poll views")
 
+    async def attach_persistent_view_for_message(self, guild_id: int, message_id: int) -> bool:
+        """Edit a poll message to add voting buttons and register the persistent view (e.g. dashboard create)."""
+        await self.bot.wait_until_ready()
+        async with self._poll_view_register_lock:
+            poll = await self.db.get_poll(guild_id, message_id)
+            if not poll:
+                return False
+            mid = int(poll["message_id"])
+            if mid in self._poll_registered_messages:
+                return True
+
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                logger.warning("attach_persistent_view_for_message: guild %s not in cache", guild_id)
+                return False
+            channel = guild.get_channel(int(poll["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                return False
+            try:
+                msg = await channel.fetch_message(mid)
+            except (discord.NotFound, discord.Forbidden) as exc:
+                logger.warning("attach_persistent_view_for_message: cannot fetch message %s: %s", mid, exc)
+                return False
+
+            options = json.loads(poll["options"])
+            view = PollView(self, poll, options)
+            await msg.edit(view=view)
+            self.bot.add_view(view)
+            self._poll_registered_messages.add(mid)
+        return True
+
     # ------------------------------------------------------------------
     # Poll command group
     # ------------------------------------------------------------------

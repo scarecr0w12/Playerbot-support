@@ -49,6 +49,7 @@ from bot.cogs.raid_protection import RaidProtectionCog
 from bot.cogs.invite_tracking import InviteTrackingCog
 from bot.cogs.birthdays import BirthdayCog
 from bot.cogs.social_alerts import SocialAlertsCog
+from bot.dashboard_bridge import set_discord_bot
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,6 +172,8 @@ async def main() -> None:
             )
             return False
         return True
+
+    set_discord_bot(bot)
 
     # --- Dashboard (run in thread to avoid blocking bot loop) ---
     import threading
