@@ -117,6 +117,10 @@ class AdminCog(commands.Cog, name="Admin"):
         self.bot = bot
         self.db = db
 
+    async def cog_load(self) -> None:
+        # Static custom_id on SelfRoleView — must survive process restarts.
+        self.bot.add_view(SelfRoleView(self))
+
     # ------------------------------------------------------------------
     # Admin command group
     # ------------------------------------------------------------------

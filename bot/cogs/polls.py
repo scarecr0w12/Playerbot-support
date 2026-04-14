@@ -11,6 +11,7 @@ Features
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone, timedelta
@@ -52,39 +53,68 @@ class PollView(discord.ui.View):
                 button.callback = self.create_vote_callback(i, option)
                 self.add_item(button)
 
-        # Add control buttons
+        # Add control buttons (must set callbacks; default Item.callback is a no-op and
+        # leaves the interaction unanswered — Discord shows "This component is no longer valid".)
         if poll_data["multiple_choice"]:
-            self.add_item(
-                discord.ui.Button(
-                    label="Clear Votes",
-                    style=discord.ButtonStyle.danger,
-                    custom_id=f"poll:clear:{poll_data['id']}",
-                )
+            clear_btn = discord.ui.Button(
+                label="Clear Votes",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"poll:clear:{poll_data['id']}",
             )
+            clear_btn.callback = self._on_clear_pressed
+            self.add_item(clear_btn)
 
-        # Add end poll button for poll creator
-        self.add_item(
-            discord.ui.Button(
-                label="End Poll",
-                style=discord.ButtonStyle.primary,
-                custom_id=f"poll:end:{poll_data['id']}",
-            )
+        end_btn = discord.ui.Button(
+            label="End Poll",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"poll:end:{poll_data['id']}",
         )
+        end_btn.callback = self._on_end_pressed
+        self.add_item(end_btn)
 
-        # Add results button
-        self.add_item(
-            discord.ui.Button(
-                label="📊 Results",
-                style=discord.ButtonStyle.success,
-                custom_id=f"poll:results:{poll_data['id']}",
-            )
+        results_btn = discord.ui.Button(
+            label="📊 Results",
+            style=discord.ButtonStyle.success,
+            custom_id=f"poll:results:{poll_data['id']}",
         )
+        results_btn.callback = self._on_results_pressed
+        self.add_item(results_btn)
 
     def create_vote_callback(self, index: int, option: str):
         """Create a callback for voting on an option."""
         async def callback(interaction: discord.Interaction):
             await self.cog.handle_vote(interaction, self.poll_data, index, option)
         return callback
+
+    async def _resolve_poll_row(self, interaction: discord.Interaction):
+        """Load poll from DB by the message the user clicked (avoids stale embed state)."""
+        guild = interaction.guild
+        msg = interaction.message
+        if guild is None or msg is None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Invalid context.", ephemeral=True)
+            return None
+        row = await self.cog.db.get_poll(guild.id, msg.id)
+        if row is None:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("❌ Poll not found.", ephemeral=True)
+            return None
+        return row
+
+    async def _on_clear_pressed(self, interaction: discord.Interaction) -> None:
+        row = await self._resolve_poll_row(interaction)
+        if row is not None:
+            await self.cog.handle_clear_votes(interaction, row)
+
+    async def _on_end_pressed(self, interaction: discord.Interaction) -> None:
+        row = await self._resolve_poll_row(interaction)
+        if row is not None:
+            await self.cog.handle_end_poll_button(interaction, row)
+
+    async def _on_results_pressed(self, interaction: discord.Interaction) -> None:
+        row = await self._resolve_poll_row(interaction)
+        if row is not None:
+            await self.cog.handle_show_results(interaction, row)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Check if the user can interact with this poll."""
@@ -110,6 +140,37 @@ class PollsCog(commands.Cog, name="Polls"):
     def __init__(self, bot: commands.Bot, db: Database) -> None:
         self.bot = bot
         self.db = db
+        self._poll_registered_messages: set[int] = set()
+        self._poll_view_register_lock = asyncio.Lock()
+
+    async def cog_load(self) -> None:
+        try:
+            asyncio.get_running_loop().create_task(self._register_poll_views_when_ready())
+        except RuntimeError:
+            pass
+
+    async def _register_poll_views_when_ready(self) -> None:
+        await self.bot.wait_until_ready()
+        await self._register_persistent_poll_views()
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        await self._register_persistent_poll_views()
+
+    async def _register_persistent_poll_views(self) -> None:
+        """Re-attach persistent poll views after a bot restart (custom_id routing)."""
+        await self.bot.wait_until_ready()
+        async with self._poll_view_register_lock:
+            for guild in self.bot.guilds:
+                polls = await self.db.get_polls(guild.id, active_only=True)
+                for poll in polls:
+                    mid = poll["message_id"]
+                    if mid in self._poll_registered_messages:
+                        continue
+                    options = json.loads(poll["options"])
+                    view = PollView(self, poll, options)
+                    self.bot.add_view(view)
+                    self._poll_registered_messages.add(mid)
 
     # ------------------------------------------------------------------
     # Poll command group
@@ -219,6 +280,7 @@ class PollsCog(commands.Cog, name="Polls"):
                 view = PollView(self, poll_data, option_list)
                 await message.edit(view=view)
                 self.bot.add_view(view)
+                self._poll_registered_messages.add(message.id)
 
                 await interaction.response.send_message(
                     f"✅ Poll created with {len(option_list)} options!\n"
@@ -324,6 +386,7 @@ class PollsCog(commands.Cog, name="Polls"):
 
         # Delete from database
         await self.db.delete_poll(guild.id, message_id)
+        self._poll_registered_messages.discard(message_id)
 
         await interaction.response.send_message(
             "✅ Poll ended and results displayed!",
@@ -376,7 +439,7 @@ class PollsCog(commands.Cog, name="Polls"):
             )
 
         if len(polls) > 10:
-            embed.set_footer(text(f"Showing 10 of {len(polls)} polls"))
+            embed.set_footer(text=f"Showing 10 of {len(polls)} polls")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -500,60 +563,6 @@ class PollsCog(commands.Cog, name="Polls"):
 
         except (discord.NotFound, discord.Forbidden):
             pass
-
-    # ------------------------------------------------------------------
-    # Button interaction handlers
-    # ------------------------------------------------------------------
-
-    @commands.Cog.listener()
-    async def on_interaction(self, interaction: discord.Interaction) -> None:
-        """Handle poll button interactions."""
-        if not interaction.data or not isinstance(interaction.data, dict):
-            return
-
-        custom_id = interaction.data.get("custom_id")
-        if not custom_id or not isinstance(custom_id, str):
-            return
-
-        parts = custom_id.split(":")
-        if parts[0] != "poll":
-            return
-
-        if len(parts) < 3:
-            return
-
-        action = parts[1]
-        poll_id = int(parts[2])
-
-        # Get poll data
-        guild = interaction.guild
-        if not guild:
-            return
-
-        # Find poll by ID (need to search since we only have poll_id)
-        polls = await self.db.get_polls(guild.id)
-        poll_data = None
-        for poll in polls:
-            if poll["id"] == poll_id:
-                poll_data = poll
-                break
-
-        if not poll_data:
-            await interaction.response.send_message(
-                "❌ Poll not found.",
-                ephemeral=True,
-            )
-            return
-
-        if action == "vote":
-            # Handled by the view callback
-            return
-        elif action == "clear":
-            await self.handle_clear_votes(interaction, poll_data)
-        elif action == "end":
-            await self.handle_end_poll_button(interaction, poll_data)
-        elif action == "results":
-            await self.handle_show_results(interaction, poll_data)
 
     async def handle_clear_votes(self, interaction: discord.Interaction, poll_data: dict) -> None:
         """Handle clearing all votes for a user in a multiple-choice poll."""

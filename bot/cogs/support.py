@@ -215,19 +215,30 @@ def _feedback_bot_response_snippet(result: dict[str, Any]) -> str:
 
 
 class FeedbackView(discord.ui.View):
-    """Thumbs-up / thumbs-down buttons attached to bot replies."""
+    """Thumbs-up / thumbs-down buttons attached to bot replies.
 
-    def __init__(self, db: Any, ctx: dict | None) -> None:
-        super().__init__(timeout=300)
+    Uses ``timeout=None`` and per-message ``custom_id`` values so buttons stay valid
+    after restarts once registered with ``bot.add_view(..., message_id=...)``.
+    ``ctx`` must include ``message_id`` (the assistant message users are rating).
+    """
+
+    def __init__(self, db: Any, ctx: dict) -> None:
+        super().__init__(timeout=None)
         self._db = db
-        self._ctx = ctx or {}
+        self._ctx = dict(ctx)
+        mid = self._ctx.get("message_id")
+        if not mid:
+            raise ValueError("FeedbackView requires message_id in ctx")
+        # Placeholder ids on decorators are replaced here for persistence + uniqueness.
+        self.thumbs_up.custom_id = f"support_fb:1:{mid}"
+        self.thumbs_down.custom_id = f"support_fb:-1:{mid}"
 
     async def _record(self, interaction: discord.Interaction, rating: int) -> None:
         ctx = self._ctx
         guild_id = ctx.get("guild_id") or (interaction.guild.id if interaction.guild else 0)
         channel_id = ctx.get("channel_id") or (interaction.channel.id if interaction.channel else 0)
         user_id = interaction.user.id
-        message_id = ctx.get("message_id") or interaction.message.id if interaction.message else 0
+        message_id = ctx.get("message_id") or (interaction.message.id if interaction.message else 0)
 
         ok = await self._db.add_feedback(
             guild_id,
@@ -243,13 +254,18 @@ class FeedbackView(discord.ui.View):
         else:
             label = "You already rated this response."
         await interaction.response.send_message(label, ephemeral=True)
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=None)
+        except (discord.HTTPException, discord.Forbidden):
+            pass
         self.stop()
 
-    @discord.ui.button(label="👍", style=discord.ButtonStyle.success, custom_id="fb_pos")
+    @discord.ui.button(label="👍", style=discord.ButtonStyle.success, custom_id="support_fb:1:0")
     async def thumbs_up(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._record(interaction, 1)
 
-    @discord.ui.button(label="👎", style=discord.ButtonStyle.danger, custom_id="fb_neg")
+    @discord.ui.button(label="👎", style=discord.ButtonStyle.danger, custom_id="support_fb:-1:0")
     async def thumbs_down(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await self._record(interaction, -1)
 
@@ -289,6 +305,25 @@ class SupportCog(commands.Cog, name="Support"):
 
     async def cog_unload(self) -> None:
         self.bot.tree.remove_command(self._ask_ctx.name, type=self._ask_ctx.type)
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        """Explain dead buttons on assistant messages from before per-message feedback ids."""
+        if interaction.type is not discord.InteractionType.component:
+            return
+        if interaction.response.is_done():
+            return
+        data = interaction.data
+        if not isinstance(data, dict):
+            return
+        cid = data.get("custom_id")
+        if cid not in ("fb_pos", "fb_neg"):
+            return
+        await interaction.response.send_message(
+            "This rating bar used an older format and no longer works. "
+            "New assistant replies have updated feedback buttons.",
+            ephemeral=True,
+        )
 
     async def _reaction_train_allowed(self, guild_id: int, member: discord.Member) -> bool:
         """Who may use 🧠/👍 to save a message as a learned fact."""
@@ -711,6 +746,17 @@ class SupportCog(commands.Cog, name="Support"):
 
         return result
 
+    async def _attach_feedback_view(self, msg: discord.Message, feedback_ctx: dict) -> None:
+        """Add persistent rating buttons after the assistant message exists (need real message id)."""
+        ctx = dict(feedback_ctx)
+        ctx["message_id"] = msg.id
+        try:
+            fb_view = FeedbackView(self.db, ctx)
+            await msg.edit(view=fb_view)
+            self.bot.add_view(fb_view, message_id=msg.id)
+        except (discord.HTTPException, discord.Forbidden, ValueError) as exc:
+            logger.warning("Could not attach feedback view to message %s: %s", getattr(msg, "id", None), exc)
+
     async def _send_result(
         self,
         send_func,
@@ -731,7 +777,6 @@ class SupportCog(commands.Cog, name="Support"):
         discord_embeds = [_embed_from_dict(e) for e in embeds_data]
         image_embeds = _embeds_for_image_urls([u for u in image_urls if isinstance(u, str) and u.strip()])
         combined_embeds = (discord_embeds + image_embeds)[:10]
-        view = FeedbackView(self.db, feedback_ctx) if feedback_ctx else discord.utils.MISSING
 
         if content:
             chunks = _split(content)
@@ -739,19 +784,16 @@ class SupportCog(commands.Cog, name="Support"):
             msg = await send_func(
                 chunks[0],
                 embeds=first_embeds or discord.utils.MISSING,
-                view=view,
+                view=discord.utils.MISSING,
             )
             if feedback_ctx and msg:
-                try:
-                    mid = msg.id if hasattr(msg, "id") else None
-                    if mid:
-                        feedback_ctx["message_id"] = mid
-                except Exception:
-                    pass
+                await self._attach_feedback_view(msg, feedback_ctx)
             for chunk in chunks[1:]:
                 await send_func(chunk)
         elif combined_embeds:
-            await send_func(embeds=combined_embeds, view=view)
+            msg = await send_func(embeds=combined_embeds, view=discord.utils.MISSING)
+            if feedback_ctx and msg:
+                await self._attach_feedback_view(msg, feedback_ctx)
         else:
             gid = feedback_ctx.get("guild_id") if feedback_ctx else None
             cid = feedback_ctx.get("channel_id") if feedback_ctx else None
