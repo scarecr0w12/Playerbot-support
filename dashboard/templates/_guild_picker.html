@@ -1,18 +1,14 @@
 {#
   Shared sidebar guild picker partial.
 
-  Usage:
-    {% include "_guild_picker.html" with context %}   {# uses current vars #}
-    {# or #}
-    {% with page_path="/economy", empty_label="No guilds found" %}
-      {% include "_guild_picker.html" %}
-    {% endwith %}
+  Usage (from a parent template):
+      {% with page_path="/economy" %}{% include "_guild_picker.html" %}{% endwith %}
 
   Expected context (all optional except `guilds`):
-    - guilds       : list of {guild_id, guild_name}
-    - guild_id     : currently selected guild id (int) or None
-    - page_path    : base path to link to (default: request.url.path)
-    - empty_label  : text shown when the list is empty
+    - guilds          : list of {guild_id, guild_name}
+    - guild_id        : currently selected guild id (int) or None
+    - page_path       : base path to link to (default: request.url.path)
+    - empty_label     : text shown when the list is empty
     - show_all_guilds : if true, render an "All Guilds" entry that clears the filter
 #}
 {% set _gp_page = page_path if page_path is defined and page_path else request.url.path %}
