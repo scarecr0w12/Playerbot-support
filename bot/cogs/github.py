@@ -87,6 +87,17 @@ logger = logging.getLogger(__name__)
 _SENDABLE_CHANNEL_TYPES = (discord.TextChannel, discord.Thread)
 
 
+def _short_api_error(body: Any) -> str:
+    if isinstance(body, dict):
+        for key in ("message", "error", "errors"):
+            value = body.get(key)
+            if value:
+                return str(value)
+    if isinstance(body, str) and body.strip():
+        return body.strip()[:200]
+    return "no details"
+
+
 
 class GitHubIssueModal(discord.ui.Modal):
     def __init__(
@@ -505,7 +516,20 @@ class GitHubCog(commands.Cog, name="GitHub"):
         new_etag = resp_headers.get("ETag") or resp_headers.get("etag")
         if status == 304 or body is None:
             return
-        if status != 200 or not isinstance(body, list):
+        if status != 200:
+            logger.warning(
+                "GitHub poller request failed for %s: status=%s detail=%s",
+                repo,
+                status,
+                _short_api_error(body),
+            )
+            return
+        if not isinstance(body, list):
+            logger.warning(
+                "GitHub poller returned unexpected body for %s: %s",
+                repo,
+                type(body).__name__,
+            )
             return
 
         events = body  # list newest-first

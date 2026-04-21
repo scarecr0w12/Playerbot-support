@@ -48,6 +48,17 @@ logger = logging.getLogger(__name__)
 
 _SENDABLE_CHANNEL_TYPES = (discord.TextChannel, discord.Thread)
 
+
+def _short_api_error(body: Any) -> str:
+    if isinstance(body, dict):
+        for key in ("message", "error", "errors"):
+            value = body.get(key)
+            if value:
+                return str(value)
+    if isinstance(body, str) and body.strip():
+        return body.strip()[:200]
+    return "no details"
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -643,7 +654,20 @@ class GitLabCog(commands.Cog, name="GitLab"):
             f"/projects/{encoded}/events?per_page=30&sort=desc"
         )
 
-        if status != 200 or not isinstance(body, list):
+        if status != 200:
+            logger.warning(
+                "GitLab poller request failed for %s: status=%s detail=%s",
+                project,
+                status,
+                _short_api_error(body),
+            )
+            return
+        if not isinstance(body, list):
+            logger.warning(
+                "GitLab poller returned unexpected body for %s: %s",
+                project,
+                type(body).__name__,
+            )
             return
 
         events: list[dict] = body
