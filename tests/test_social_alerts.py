@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -81,6 +82,54 @@ class SocialAlertHelperTests(unittest.TestCase):
 
 
 class SocialAlertCogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_process_alert_accepts_sqlite_row(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        alert = conn.execute(
+            """
+            SELECT
+                1 AS id,
+                123 AS guild_id,
+                456 AS channel_id,
+                'rss' AS platform,
+                'https://example.com/feed.xml' AS account_id,
+                'stream' AS alert_type,
+                'Now live: {title} {link}' AS message_template
+            """
+        ).fetchone()
+        self.assertIsNotNone(alert)
+
+        channel = AsyncMock()
+        db = MagicMock()
+        db.check_alert_history = AsyncMock(return_value=False)
+        db.record_alert_history = AsyncMock()
+
+        bot = MagicMock()
+        cog = SocialAlertsCog(bot, db, config=SimpleNamespace())
+        item = MagicMock()
+        item.content_id = "rss:item-1"
+        item.platform = "rss"
+        item.creator_name = "Creator"
+        item.date_text = "2026-04-26T12:00:00Z"
+        item.description = "Example description"
+        item.game_name = None
+        item.link = "https://example.com/posts/1"
+        item.thumbnail_url = None
+        item.title = "Example title"
+        item.viewer_count = None
+        item.timestamp = None
+
+        cog._resolve_channel = AsyncMock(return_value=channel)
+        cog._fetch_alert_items = AsyncMock(return_value=[item])
+        try:
+            await cog._process_alert(MagicMock(), alert)
+        finally:
+            cog.cog_unload()
+            conn.close()
+
+        channel.send.assert_awaited_once()
+        db.record_alert_history.assert_awaited_once_with(123, 1, "rss:item-1")
+
     async def test_resolve_channel_fetches_when_not_cached(self) -> None:
         guild = MagicMock()
         guild.get_channel.return_value = None

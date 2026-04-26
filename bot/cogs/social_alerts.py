@@ -9,6 +9,7 @@ import asyncio
 import email.utils
 import logging
 import re
+import sqlite3
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -95,6 +96,12 @@ def _pick_best_thumbnail(thumbnails: dict[str, dict[str, Any]] | None) -> str | 
     return None
 
 
+def _coerce_alert_record(alert: dict[str, Any] | sqlite3.Row) -> dict[str, Any]:
+    if isinstance(alert, dict):
+        return alert
+    return {key: alert[key] for key in alert.keys()}
+
+
 class SocialAlertsCog(commands.Cog, name="Social Alerts"):
     """Monitor RSS feeds and live stream providers for new alerts."""
 
@@ -135,8 +142,9 @@ class SocialAlertsCog(commands.Cog, name="Social Alerts"):
     async def before_feed_check(self) -> None:
         await self.bot.wait_until_ready()
 
-    async def _process_alert(self, session: aiohttp.ClientSession, alert: dict) -> None:
+    async def _process_alert(self, session: aiohttp.ClientSession, alert: dict[str, Any] | sqlite3.Row) -> None:
         """Fetch a platform target and post new alerts to the configured channel."""
+        alert = _coerce_alert_record(alert)
         channel = await self._resolve_channel(alert)
         if channel is None:
             return
