@@ -26,10 +26,8 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     MatchValue,
-    NamedVector,
     PointIdsList,
     PointStruct,
-    Query,
     VectorParams,
 )
 
